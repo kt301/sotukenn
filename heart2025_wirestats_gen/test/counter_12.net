@@ -1,0 +1,15 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs clk rst_n valid_count
+outputs \out[0] \out[1] \out[2] \out[3]
+
+pae _19_ \out[0] valid_count \out[1] \out[2] _05_ _08_ _11_
+pae _24_ _09_ \out[2] \out[3] _08_ nc _14_ _13_
+pae _25_ _04_ \out[0] _06_ nc nc _00_ nc
+pae _26_ _06_ \out[1] _09_ nc nc _01_ nc
+pae _27_ _11_ \out[3] _13_ nc nc _03_ nc
+pae _28_ _11_ _14_ nc nc _02_ nc nc
+pae _29_ _05_ _17_ nc nc _06_ nc nc
+pae _30_ _08_ _17_ nc nc _09_ nc nc
+pae _31_ valid_count _17_ nc nc _04_ nc nc

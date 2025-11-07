@@ -1,0 +1,22 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs \a[0] \a[1] \a[2] \a[3] \b[0] \b[1] \b[2] \b[3] cin
+outputs cout \sum[0] \sum[1] \sum[2] \sum[3]
+
+pae _31_ \a[1] _07_ _07_ \a[1] _09_ _10_ nc
+pae _32_ _02_ _05_ nc nc _07_ nc nc
+pae _33_ _09_ _12_ nc nc _14_ nc nc
+pae _34_ \a[0] _29_ nc nc _00_ nc nc
+pae _35_ _03_ _29_ nc nc _04_ nc nc
+pae _36_ _10_ _29_ nc nc _11_ nc nc
+pae _37_ _17_ _29_ nc nc _18_ nc nc
+pae _38_ _24_ _29_ nc nc _25_ nc nc
+pae _39_ \a[2] _14_ _14_ \a[2] _16_ _17_ nc
+pae _40_ _04_ \b[0] \b[0] _03_ nc \sum[0] _05_
+pae _41_ _11_ \b[1] \b[1] _10_ nc \sum[1] _12_
+pae _42_ _18_ \b[2] \b[2] _17_ nc \sum[2] _19_
+pae _43_ _25_ \b[3] \b[3] _24_ nc \sum[3] _26_
+pae _44_ _00_ cin cin \a[0] nc _03_ _02_
+pae _45_ _26_ \a[3] _21_ _22_ cout nc _24_
+pae _46_ _16_ _19_ \a[3] nc _21_ _22_ nc

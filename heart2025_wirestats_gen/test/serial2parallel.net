@@ -1,0 +1,38 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs clk din_serial din_valid rst_n
+outputs \dout_parallel[0] \dout_parallel[1] \dout_parallel[2] \dout_parallel[3] \dout_parallel[4] \dout_parallel[5] \dout_parallel[6] \dout_parallel[7] dout_valid
+
+pae _075_ _047_ _048_ \din_tmp[3] _035_ _004_ nc _016_
+pae _076_ \din_tmp[6] _061_ \din_tmp[7] _062_ nc _012_ nc
+pae _077_ \din_tmp[0] _004_ \dout_parallel[0] _049_ nc _013_ nc
+pae _078_ \din_tmp[1] _004_ \dout_parallel[1] _049_ nc _014_ nc
+pae _079_ \din_tmp[2] _004_ \dout_parallel[2] _049_ nc _015_ nc
+pae _080_ \din_tmp[4] _004_ \dout_parallel[4] _049_ nc _017_ nc
+pae _081_ \din_tmp[5] _004_ \dout_parallel[5] _049_ nc _018_ nc
+pae _082_ \din_tmp[6] _004_ \dout_parallel[6] _049_ nc _019_ nc
+pae _083_ \din_tmp[7] _004_ \dout_parallel[7] _049_ nc _020_ nc
+pae _084_ _045_ _052_ din_valid _055_ nc _002_ nc
+pae _085_ din_valid _052_ _044_ \cnt[1] nc _001_ _047_
+pae _086_ _046_ din_valid \din_tmp[5] _025_ _061_ nc _011_
+pae _087_ _044_ din_valid _049_ _060_ _000_ nc _003_
+pae _088_ \cnt[3] _055_ _059_ nc nc _060_ nc
+pae _089_ \din_tmp[6] _062_ nc nc _025_ nc nc
+pae _090_ \dout_parallel[3] _049_ nc nc _035_ nc nc
+pae _091_ _045_ \cnt[3] nc nc _048_ nc nc
+pae _092_ \cnt[0] _073_ nc nc _044_ nc nc
+pae _093_ \cnt[2] _073_ nc nc _045_ nc nc
+pae _094_ \cnt[3] _073_ nc nc _046_ nc nc
+pae _095_ _004_ _073_ nc nc _049_ nc nc
+pae _096_ _051_ _073_ nc nc _052_ nc nc
+pae _097_ \cnt[1] \cnt[0] \cnt[2] _046_ _051_ _054_ _059_
+pae _098_ _054_ _073_ nc nc _055_ nc nc
+pae _099_ _061_ _073_ nc nc _062_ nc nc
+pae _108_ din_serial _061_ \din_tmp[0] _062_ nc _005_ nc
+pae _119_ \din_tmp[0] _061_ \din_tmp[1] _062_ nc _006_ nc
+pae _123_ \din_tmp[1] _061_ \din_tmp[2] _062_ nc _007_ nc
+pae _124_ \din_tmp[2] _061_ \din_tmp[3] _062_ nc _008_ nc
+pae _125_ \din_tmp[3] _061_ \din_tmp[4] _062_ nc _009_ nc
+pae _126_ \din_tmp[4] _061_ \din_tmp[5] _062_ nc _010_ nc
+pae GEN_0_ _004_ _073_ _073_ nc GEN__004_ nc nc

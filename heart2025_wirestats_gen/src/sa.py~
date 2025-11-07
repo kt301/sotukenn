@@ -1,0 +1,262 @@
+import networkx as nx
+import random
+import math
+import matplotlib.pyplot as plt
+import glob
+from yggdrasill.utils import parse_circuit
+from yggdrasill.utils import PAENode
+import tqdm
+
+def initial_placement(G, grid_size_x=4, grid_size_y=2):
+    nodes = [n for n in G.nodes() if n not in ['inputs', 'outputs']]
+    positions = [(x, y) for x in range(grid_size_x) for y in range(grid_size_y)]
+    random.shuffle(positions)
+    pos = dict(zip(nodes, positions))
+    mid_x = (grid_size_x - 1) / 2
+    pos['inputs'] = (mid_x, -1)
+    pos['outputs'] = (mid_x, grid_size_y)
+
+    return pos
+
+def total_cost(G, pos, M=10000, w_ff=2, w_fb=10, OmuxCost=100):
+#def total_cost(G, pos, M=1000, w_ff=1, w_fb=5, OmuxCost=10):    
+    total = 0
+    for u, v in G.edges():
+        if u == 'inputs' or v == 'outputs':
+            continue
+        
+        x1, y1 = pos[u]
+        x2, y2 = pos[v]
+
+        
+        if y2 - y1 == 1:
+            Ce_y = -M
+        elif y2 - y1 >= 2:
+            Ce_y = w_ff * (y2 - y1) + OmuxCost
+            #Ce_y = w_ff * (y2 - y1)
+        else:# y2 - y1 < 0:
+            Ce_y = w_fb * (abs(y2 - y1) + 1) + OmuxCost
+            #Ce_y = w_fb * (y1 - y2) + OmuxCost
+        Ce_x = abs(x2 - x1)
+        
+
+        '''
+        if y2 == y1:
+            Ce_y = M            
+        elif y2 - y1 > 0:
+            Ce_y = w_ff * (y2 - y1)
+        else:# y2 - y1 < 0:
+            Ce_y = w_fb * (y1 - y2) + OmuxCost            
+        Ce_x = abs(x2 - x1) + abs(y2 - y1)        
+        '''
+
+        total += Ce_x + Ce_y
+    return total        
+        
+
+
+def simulated_annealing(G, initial_pos, grid_size_x=4, grid_size_y=2, initial_temp=1000, cooling_rate=0.995, iterations=100000):
+#def simulated_annealing(G, initial_pos, grid_size=4, initial_temp=3000, cooling_rate=0.995, iterations=300000):        
+    current_pos = initial_pos.copy()
+    best_pos = current_pos.copy()
+    current_cost = total_cost(G, current_pos)
+    best_cost = current_cost
+    temp = initial_temp
+
+    # 全ての可能な位置を生成
+    all_positions = [(x, y) for x in range(grid_size_x) for y in range(grid_size_y)]
+
+    for _ in range(iterations):
+        nodes = [n for n in G.nodes() if n not in ['inputs', 'outputs']]
+        node_to_move = random.choice(nodes)
+        
+        # 現在の位置を除外
+        possible_positions = [pos for pos in all_positions if pos != current_pos[node_to_move]]
+        
+        # ノードを新しい位置に移動（空いている位置または他のノードと交換）
+        new_pos = current_pos.copy()
+        new_position = random.choice(possible_positions)
+        
+        # 選択した位置に他のノードがある場合は交換、なければ単に移動
+        node_at_new_position = next((node for node, pos in new_pos.items() if pos == new_position), None)
+        if node_at_new_position:
+            new_pos[node_at_new_position] = current_pos[node_to_move]
+        new_pos[node_to_move] = new_position
+        
+        new_cost = total_cost(G, new_pos)
+        cost_diff = new_cost - current_cost
+
+        if cost_diff < 0 or random.random() < math.exp(-cost_diff / temp):
+            current_pos = new_pos
+            current_cost = new_cost
+
+            if current_cost < best_cost:
+                best_pos = current_pos.copy()
+                best_cost = current_cost
+
+        temp *= cooling_rate
+
+    return best_pos
+
+def create_plot(G, pos, grid_size_x=4, grid_size_y=2):
+    plt.figure(figsize=(12, 12))
+    
+    for i in range(grid_size_x+1):
+        plt.axvline(x=i-0.5, color='gray', linestyle='--', alpha=0.5)
+
+    for i in range(grid_size_y+1):
+        plt.axhline(y=grid_size-i+0.5, color='gray', linestyle='--', alpha=0.5)
+
+
+
+        
+    inverted_pos = {node: (x, grid_size_y - y) for node, (x, y) in pos.items()}
+    
+    nx.draw_networkx_nodes(G, inverted_pos, node_size=500, node_color='lightblue')
+    #nx.draw_networkx_nodes(G, inverted_pos, node_size=2000, node_color='lightblue')    
+    nx.draw_networkx_labels(G, inverted_pos, font_size=8)
+    
+    nx.draw_networkx_nodes(G, inverted_pos, nodelist=['inputs', 'outputs'], node_size=3000, node_color='lightgreen')
+    
+    for u, v in G.edges():
+        if u == 'inputs' or v == 'outputs':
+            continue        
+        start = inverted_pos[u]
+        end = inverted_pos[v]
+        plt.arrow(start[0], start[1], end[0]-start[0], end[1]-start[1], 
+                  shape='full', lw=1, length_includes_head=True, head_width=0.3)
+#            shape='full', lw=1, length_includes_head=True, head_width=0.2)        
+    
+    plt.title("Place and Route")
+    plt.xlim(-1, grid_size_x)
+    plt.ylim(-1, grid_size_y + 2)
+    plt.axis('off')
+    plt.tight_layout()
+
+def draw_fpga(G, pos, grid_size_x=4, grid_size_y=2):
+    create_plot(G, pos, grid_size_x, grid_size_y)
+    plt.show()
+
+def save_fpga(G, pos, grid_size_x=4, grid_size_y=2, filename='place_and_route.png'):
+    create_plot(G, pos, grid_size_x, grid_size_y)
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+
+def get_grid_size(num_nodes):
+    # 入力と出力ノードを除外
+
+    #return 5
+    #return 16
+    return 4
+    
+    num_nodes -= 2
+    num_nodes *= 2
+    sqrt_nodes = math.sqrt(num_nodes)
+    grid_size = math.ceil(sqrt_nodes)
+    # sqrt_nodes = math.sqrt(num_nodes)    
+    # grid_size = math.ceil(sqrt_nodes / 2) * 2    
+    #return max(4, grid_size)
+
+
+
+# count wires and compute histgram (statistics) (wireStats)    
+def compute_wireStats(wires, wireStats):
+    for w in wires:
+        v = wireStats.get(w)
+        if v is None:
+            wireStats[w] = 1
+        else:
+            wireStats[w] = wireStats[w] + 1
+        
+    
+    
+# Get interconnects from PAE output to PAE input
+def get_wires(PAENodes, optimized_pos):
+
+    # edge count dictionary
+
+    PAEOutputNameToNode = {}  # Dictionary of key: PAE output, value: PAE node
+    PAEOutputNameToIndex = {} # Dictionary of key: PAE output, value: PAE output index
+
+    # re-organize PAE netlist (gather information PAEOutputNameToNode[], PAEOutputNameToIndex[])
+    for pn in PAENodes:
+        for oname in pn.outputNames:
+            PAEOutputNameToNode[oname] = pn
+            PAEOutputNameToIndex[oname] = pn.outputNames.index(oname)
+
+    # build edge information
+    edges = []
+
+    for pn in PAENodes:
+
+#        print(">>> pn : ", pn.name)
+        for input_index, iname in enumerate(pn.inputNames):
+            if iname == 'nc':
+                continue
+
+#            print(">>>>>> pn input: ", iname)            
+            output_pn = PAEOutputNameToNode.get(iname, None)
+            output_index = PAEOutputNameToIndex.get(iname, -1)
+            if output_pn != None:
+ #               print(">>>>>>>>> output pn: ", output_pn.name, ", index=", output_index)
+                edge = [] # (output PAE node, output index, PAE node, input index)
+                edge.append(output_pn.name)
+                edge.append(output_index)
+                edge.append(pn.name)
+                edge.append(input_index)
+                edges.append(edge)
+
+    wires = []
+    for e in edges:
+  #      print("edge:")
+   #     print(e)
+        
+        # replace PAE name to PAE coordinate
+        src_pos = optimized_pos[e[0]]  # position of output PAE cell
+        dst_pos = optimized_pos[e[2]]  # position of PAE Cell
+
+        wire = (src_pos[0], src_pos[1], e[1], dst_pos[0], dst_pos[1], e[3])
+        wires.append(wire)
+        
+                
+    return wires
+
+wireStats = {} # dictionary for wire and wire count
+
+for filename in tqdm.tqdm(glob.glob('data/netlists/*.net')):
+    with open(filename) as f:
+        G, PAENodes = parse_circuit(f.read())
+
+    for pn in PAENodes:
+#        print("print node")
+#        print("name:", pn.name, "inputNames:", pn.inputNames, "outputNames", pn.outputNames)
+
+    #grid_size = get_grid_size(len(G.nodes()))
+    grid_size_x = 4
+    grid_size_y = 2
+    initial_pos = initial_placement(G, grid_size_x, grid_size_y)
+    #print("Initial cost:", total_cost(G, initial_pos))     # added
+    optimized_pos = simulated_annealing(G, initial_pos, grid_size_x=grid_size_x, grid_size_y=grid_size_y)
+    #print("Optimized cost:", total_cost(G, optimized_pos)) # added
+    
+    #save_fpga(G, optimized_pos, grid_size=grid_size, filename=f'output/{filename.split("/")[-1].replace(".net", ".png")}')
+
+
+    wires = get_wires(PAENodes, optimized_pos)
+    for w in wires:
+        print("wire:")
+        print(w)
+
+
+    compute_wireStats(wires, wireStats)
+
+sortedWireStats = dict(sorted(wireStats.items(), key=lambda item: item[1], reverse=True))
+    
+print("wireStats: ", len(sortedWireStats), " wires")
+i = 0
+for k, v in sortedWireStats.items():
+    print("[",i,"]",k, "count=", v)
+    i+=1
+    
+
+exit()

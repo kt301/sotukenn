@@ -1,0 +1,42 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs \a[0] \a[1] \a[2] \a[3] \a[4] \a[5] \a[6] \a[7] \b[0] \b[1] \b[2]
+outputs \c[0] \c[1] \c[2] \c[3] \c[4] \c[5] \c[6] \c[7]
+
+pae _62_ _14_ \a[7] _05_ _16_ nc nc _07_
+pae _63_ _14_ _19_ _44_ _16_ nc _45_ _46_
+pae _64_ _55_ _56_ _17_ _03_ nc nc \c[6]
+pae _65_ \b[2] _16_ _40_ _17_ _42_ nc \c[0]
+pae _66_ \b[2] _16_ _27_ _17_ _51_ nc \c[1]
+pae _67_ _17_ _24_ _28_ \b[2] \c[3] nc _11_
+pae _68_ _17_ _00_ _58_ \b[2] \c[2] nc _03_
+pae _69_ _14_ \a[0] \b[1] nc _40_ _00_ nc
+pae _70_ \b[0] _19_ nc nc _53_ nc nc
+pae _71_ _13_ \b[0] nc nc _22_ nc nc
+pae _72_ _12_ \b[0] nc nc _31_ nc nc
+pae _73_ \b[0] \a[0] _25_ \b[1] nc _27_ _28_
+pae _74_ \b[0] _15_ nc nc _34_ nc nc
+pae _75_ \b[0] _18_ nc nc _44_ nc nc
+pae _76_ \b[0] _20_ nc nc _05_ nc nc
+pae _77_ _14_ _15_ nc nc _25_ nc nc
+pae _78_ _16_ _32_ nc nc _36_ nc nc
+pae _79_ \b[1] _23_ nc nc _47_ nc nc
+pae _80_ _16_ _35_ nc nc _58_ nc nc
+pae _81_ \b[1] _45_ nc nc _08_ nc nc
+pae _82_ \a[3] _60_ nc nc _12_ nc nc
+pae _83_ \a[2] _60_ nc nc _13_ nc nc
+pae _84_ _37_ _36_ _17_ _42_ nc nc \c[4]
+pae _85_ \b[0] _60_ nc nc _14_ nc nc
+pae _86_ \a[1] _60_ nc nc _15_ nc nc
+pae _87_ \b[1] _60_ nc nc _16_ nc nc
+pae _88_ \b[2] _60_ nc nc _17_ nc nc
+pae _89_ \a[4] _60_ nc nc _18_ nc nc
+pae _90_ \a[5] _60_ nc nc _19_ nc nc
+pae _91_ \a[6] _60_ nc nc _20_ nc nc
+pae _92_ _46_ _47_ _17_ _51_ nc nc \c[5]
+pae _93_ _07_ _08_ _17_ _11_ nc nc \c[7]
+pae _94_ _14_ _20_ _53_ _16_ nc nc _55_
+pae _95_ _12_ _14_ _22_ _16_ nc _23_ _24_
+pae _96_ _14_ _18_ _31_ \b[1] nc _32_ _56_
+pae _97_ _13_ _14_ _34_ \b[1] nc _35_ _37_

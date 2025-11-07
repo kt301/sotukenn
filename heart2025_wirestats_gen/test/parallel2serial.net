@@ -1,0 +1,16 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs clk \d[0] \d[1] \d[2] \d[3] rst_n
+outputs dout valid_out
+
+pae _20_ _07_ dout _06_ \d[0] nc _02_ nc
+pae _27_ _07_ \data[0] _06_ \d[1] nc _03_ nc
+pae _28_ _07_ \data[1] _06_ \d[2] nc _04_ nc
+pae _29_ _07_ \data[2] _06_ \d[3] nc _05_ nc
+pae _30_ _00_ \cnt[1] _07_ nc nc _01_ nc
+pae _31_ \cnt[0] \cnt[1] nc nc _06_ nc nc
+pae _32_ \cnt[0] _18_ nc nc _00_ nc nc
+pae _33_ _06_ _18_ nc nc _07_ nc nc
+pae GEN_0_ _00_ _18_ _18_ nc GEN__00_ nc nc
+pae GEN_1_ _06_ _18_ _18_ nc GEN__06_ nc nc

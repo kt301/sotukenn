@@ -1,0 +1,20 @@
+#解けた例題
+
+PAEinputs 4
+PAeoutputs 3
+
+inputs i1 i2 i3 i4 i5 i6
+outputs o1 o2
+
+pae p1 i1 i2 nc nc o1 nc t1
+pae p2 i1 nc i3 t1 nc t2 nc
+pae p3 i4 i3 t1 t2 t3 nc o2
+#pae p4 i3 t3 i2 t2 nc t4 nc
+#pae p5 t4 t3 i5 nc o2 nc nc
+#pae p6
+#pae p7
+#pae p8
+#pae p9
+#pae p10
+
+

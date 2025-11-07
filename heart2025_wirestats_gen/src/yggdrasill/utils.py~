@@ -1,0 +1,57 @@
+import networkx as nx
+
+def parse_circuit(circuit_description:str) -> nx.DiGraph:
+
+    edges = {}
+
+    lines = circuit_description.strip().split('\n')
+    lines = list(filter(lambda x: len(x) > 0, map(lambda x: x.strip(), lines)))
+
+    max_input_num = int(lines[0].split()[1])
+    max_output_num = int(lines[1].split()[1])
+
+    inputs = lines[2].split()[1:]
+    outputs = lines[3].split()[1:]
+    
+    for inp in inputs:
+        edges[inp] = ('inputs', [])
+    for out in outputs:
+        edges[out] = (None, ['outputs'])
+    
+    for line in lines[4:]:
+        parts = line.split()
+        node_name = parts[1]
+        node_inputs = parts[2: 2 + max_input_num]
+        node_outputs = parts[2 + max_input_num: 2 + max_input_num + max_output_num]
+
+        for inp in filter(lambda x: x != 'nc', node_inputs):
+            if edges.get(inp) is None:
+                edges[inp] = (None, [node_name])
+            else:
+                edges[inp][1].append(node_name)
+
+        for out in filter(lambda x: x != 'nc', node_outputs):
+            if edges.get(out) is None:
+                edges[out] = (node_name, [])
+            else:
+                edges[out]= (node_name, edges[out][1])
+
+    # 本来ならこれは必要ないはず
+    edges = {k: v for k, v in edges.items() if v[0] is not None and len(v[1]) > 0}
+
+    # グラフの作成
+    G = nx.DiGraph()
+    nodes = set()
+    
+    for k, v in edges.items():
+        nodes.add(v[0])
+        nodes.update(v[1])
+
+    for node in nodes:
+        G.add_node(node)
+    
+    for k, v in edges.items():
+        for out in v[1]:
+            G.add_edge(v[0], out, label=k)
+
+    return G

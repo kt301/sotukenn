@@ -1,0 +1,13 @@
+--- Overall Circuit Statistics ---
+Total netlists processed: 500
+
+--- Feedback Statistics ---
+Average feedback wires per netlist: 4.68
+
+--- Input Pin Physical Position Fan-out Statistics (Sorted by Average Fan-out) ---
+Physical Coord (x, y)     | Average Fan-out      | Usage Count (Netlists)
+--------------------------+----------------------+--------------------------
+(1.00, -1)                | 1.21                 | 2507
+(3.00, -1)                | 1.19                 | 2226
+(0.00, -1)                | 1.18                 | 2631
+(2.00, -1)                | 1.16                 | 2366

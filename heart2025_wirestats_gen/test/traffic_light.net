@@ -1,0 +1,51 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs clk pass_request rst_n
+outputs \clock[0] \clock[1] \clock[2] \clock[3] \clock[4] \clock[5] \clock[6] \clock[7] green red yellow
+
+pae _085_ p_yellow yellow _072_ _055_ _056_ nc _000_
+pae _086_ \clock[6] _018_ _024_ _027_ nc nc _004_
+pae _087_ green pass_request _052_ _010_ nc _054_ _001_
+pae _088_ _038_ _080_ _042_ \clock[3] _057_ _059_ _060_
+pae _089_ _061_ _064_ _060_ _056_ nc nc _067_
+pae _090_ _044_ _056_ _070_ _054_ _068_ nc _008_
+pae _091_ \clock[0] \clock[1] _031_ \state[0] _048_ _032_ _035_
+pae _092_ _042_ _081_ _057_ _041_ _062_ _063_ _011_
+pae _093_ _039_ _040_ _046_ _062_ nc _047_ _031_
+pae _094_ p_red red _049_ _058_ _061_ _070_ nc
+pae _095_ \state[1] _033_ _035_ nc nc _079_ nc
+pae _096_ p_green green _054_ _067_ _044_ _055_ _009_
+pae _097_ _044_ _015_ _054_ nc nc _002_ nc
+pae _098_ _044_ _021_ _054_ nc nc _003_ nc
+pae _099_ _056_ _061_ _055_ nc _014_ _027_ nc
+pae _100_ \state[0] \state[1] nc nc _006_ nc nc
+pae _101_ _043_ \state[1] nc nc _007_ nc nc
+pae _102_ \state[0] \state[1] nc nc _077_ nc nc
+pae _103_ \clock[7] _023_ nc nc _028_ nc nc
+pae _104_ _038_ _061_ nc nc _072_ nc nc
+pae _105_ _068_ _076_ nc nc _010_ nc nc
+pae _106_ \clock[0] _083_ nc nc _038_ nc nc
+pae _107_ _041_ \clock[5] _063_ _039_ _046_ _017_ _023_
+pae _108_ \clock[6] _083_ nc nc _039_ nc nc
+pae _109_ \clock[7] _083_ nc nc _040_ nc nc
+pae _110_ \clock[4] _083_ nc nc _041_ nc nc
+pae _111_ \clock[2] _083_ nc nc _042_ nc nc
+pae _112_ \state[0] _083_ nc nc _043_ nc nc
+pae _113_ _080_ _083_ nc nc \clock[1] nc nc
+pae _114_ _081_ _083_ nc nc \clock[3] nc nc
+pae _115_ _048_ _083_ nc nc _049_ nc nc
+pae _116_ _057_ _083_ nc nc _058_ nc nc
+pae _117_ _063_ _083_ nc nc _064_ nc nc
+pae _118_ _040_ _024_ _028_ _027_ nc nc _005_
+pae _119_ _017_ _083_ nc nc _018_ nc nc
+pae _120_ _023_ _083_ nc nc _024_ nc nc
+pae _121_ _032_ _083_ nc nc _033_ nc nc
+pae _129_ _042_ _049_ \clock[3] _047_ nc nc _052_
+pae _139_ _043_ _033_ _035_ \state[1] nc nc _078_
+pae _140_ \clock[2] _058_ _059_ _061_ nc nc _076_
+pae _141_ \clock[4] _064_ _011_ _014_ nc nc _015_
+pae _142_ \clock[5] _011_ _018_ _014_ nc nc _021_
+pae GEN_0_ p_red _083_ _083_ nc GEN_p_red nc nc
+pae GEN_1_ p_yellow _083_ _083_ nc GEN_p_yellow nc nc
+pae GEN_2_ p_green _083_ _083_ nc GEN_p_green nc nc

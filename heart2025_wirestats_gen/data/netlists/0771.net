@@ -1,0 +1,20 @@
+PAEinputs 4
+PAEoutputs 3
+inputs pi0963 pi0615 _41285_ pi0907 pi0979 pi0782 pi0978 pi0598 _06733_ pi0947 pi0970 pi0975 pi0972 _12183_ pi0604 pi0960
+outputs po1129 po1063 po1115 po1132 po1103 po1125 po1127 po1137 po1118 po1133
+pae _53400_ pi0782 _42845_ nc nc _12657_ nc nc
+pae _44036_ pi0947 _12657_ _41288_ nc nc po1103 nc
+pae _58209_ pi0979 _11990_ pi0782 _41285_ nc nc _41288_
+pae _53350_ pi0598 _42845_ nc nc _11990_ nc nc
+pae _45518_ _11990_ pi0615 nc nc po1133 nc nc
+pae _53353_ pi0604 _42845_ nc nc _12017_ nc nc
+pae _45519_ _12017_ _12183_ nc nc po1137 nc nc
+pae _45899_ pi0960 _12657_ nc nc po1115 nc nc
+pae _45901_ pi0963 _12657_ nc nc po1118 nc nc
+pae _45905_ pi0970 _12657_ nc nc po1125 nc nc
+pae _45907_ pi0972 _12657_ nc nc po1127 nc nc
+pae _45909_ pi0975 _12657_ nc nc po1129 nc nc
+pae _45911_ pi0978 _12657_ nc nc po1132 nc nc
+pae _46634_ _06733_ _12017_ nc nc _41291_ nc nc
+pae _57604_ pi0907 _12657_ _41293_ _41288_ nc nc po1063
+pae _58210_ pi0979 pi0615 pi0782 _41291_ nc nc _41293_

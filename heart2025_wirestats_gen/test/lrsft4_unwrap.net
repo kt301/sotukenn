@@ -1,0 +1,20 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs \a[0] \a[1] \a[2] \a[3] \b[0] \b[1] \b[2]
+outputs \c[0] \c[1] \c[2] \c[3]
+
+pae _23_ \b[0] \a[0] _05_ _04_ nc _07_ _08_
+pae _24_ \b[1] _03_ nc nc _04_ nc nc
+pae _25_ \a[2] _21_ nc nc _00_ nc nc
+pae _26_ \b[0] _21_ nc nc _01_ nc nc
+pae _27_ \a[1] _21_ nc nc _02_ nc nc
+pae _28_ \b[2] _21_ nc nc _03_ nc nc
+pae _29_ _01_ \a[3] _11_ _09_ nc nc _13_
+pae _30_ \b[0] _02_ _11_ _16_ nc nc _19_
+pae _31_ _01_ \a[0] _04_ _19_ _14_ nc \c[2]
+pae _32_ _14_ _03_ \b[1] _07_ \c[0] _11_ \c[1]
+pae _33_ _08_ _13_ nc nc \c[3] nc nc
+pae _34_ _01_ _02_ nc nc _05_ nc nc
+pae _35_ _00_ \b[0] nc nc _09_ nc nc
+pae _36_ _00_ _01_ nc nc _16_ nc nc

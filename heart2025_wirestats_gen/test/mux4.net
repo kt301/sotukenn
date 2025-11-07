@@ -1,0 +1,12 @@
+PAEinputs 4
+PAEoutputs 3
+
+inputs \in[0] \in[1] \in[2] \in[3] \sel[0] \sel[1]
+outputs out
+
+pae _12_ \in[1] \sel[0] _03_ \sel[1] nc nc _07_
+pae _13_ _08_ \in[2] \sel[1] _00_ nc nc _06_
+pae _14_ \in[0] _08_ nc nc _03_ nc nc
+pae _15_ \sel[0] \in[3] nc nc _00_ nc nc
+pae _16_ _06_ _07_ nc nc out nc nc
+pae _17_ \sel[0] _10_ nc nc _08_ nc nc

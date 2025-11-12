@@ -100,16 +100,17 @@ def compute_wireStats(wires_collection, wireStats_total_usage):
         wireStats_total_usage[w] += 1
 
 
-def total_cost(G, pos, PAENodes, wirestat_final_set, M=10000, w_ff=2, w_fb=10, OmuxCost=100, w_io=5, MUX_PENALTY_WEIGHT=10000, MUX_SIZE_LIMIT=32):
+def total_cost(G, pos, PAENodes, wirestat_final_set, M=10000, w_ff=2, w_fb=10,MUX_PENALTY_WEIGHT=10000,SHARED_BONUS=-10000,
+               MUX_SIZE_LIMIT=32, OmuxCost=0, w_io=0):
     total = 0
     mux_usage = defaultdict(int) # この配置でのMUX使用数をカウント
     current_wires = set()        # この配置で使う全配線
 
-    # --- 1. 現時点の配置(pos)から、使う「物理配線」を全て計算 ---
+    # 1. 現時点の配置(pos)から、使う「物理配線」を全て計算
     PAEOutputNameToNode = {oname: pn for pn in PAENodes for oname in pn.outputNames}
     PAEOutputNameToIndex = {oname: pn.outputNames.index(oname) for pn in PAENodes for oname in pn.outputNames}
 
-    # 1a. 内部セル -> 内部セルの配線
+    # 内部セル -> 内部セルの配線
     for pn in PAENodes:
         if pn.name not in pos: continue 
         for input_index, iname in enumerate(pn.inputNames):
@@ -128,7 +129,7 @@ def total_cost(G, pos, PAENodes, wirestat_final_set, M=10000, w_ff=2, w_fb=10, O
                 mux_key = (dst_pos[0], dst_pos[1], input_index)
                 mux_usage[mux_key] += 1
 
-    # 1b. PI -> 内部セルの配線
+    # PI -> 内部セルの配線
     for u, v in G.edges():
         v_data = G.nodes.get(v, {})
         if G.nodes[u].get('type') == 'input' and 'pae_node' in v_data:
@@ -153,12 +154,12 @@ def total_cost(G, pos, PAENodes, wirestat_final_set, M=10000, w_ff=2, w_fb=10, O
             mux_key = (dst_pos[0], dst_pos[1], dst_pin)
             mux_usage[mux_key] += 1
 
-    # --- 2. 配線コストの計算  ---
+    #  2. 配線コストの計算
     for wire in current_wires:
         
         # ルール1: 配線共有ボーナス （既存配線ならばコストは０、マイナスの方がいいかもしれない要調整）
         if wire in wirestat_final_set: #(既存の配線)
-            total += 0
+            total += SHARED_BONUS
             continue   
             
         # 以下は新規配線の場合
@@ -166,7 +167,7 @@ def total_cost(G, pos, PAENodes, wirestat_final_set, M=10000, w_ff=2, w_fb=10, O
         
         # ルール2: 隣接ボーナス＆配線長コスト
         if src_pin == -1: # PI -> Cell の場合
-            pass
+            total += w_io
         else: # Cell -> Cell の場合
             if y2 - y1 == 1: Ce_y = -M # 隣接するセルへの入力　ボーナスを与える
             elif y2 - y1 >= 2: Ce_y = w_ff * (y2 - y1) + OmuxCost #フィードフォワード　ペナルティを与える
@@ -177,17 +178,18 @@ def total_cost(G, pos, PAENodes, wirestat_final_set, M=10000, w_ff=2, w_fb=10, O
     # ルール3:MUX溢れペナルティ
     for mux_key, count in mux_usage.items():
         if count > MUX_SIZE_LIMIT:
-            overflow = count - MUX_SIZE_LIMIT
-            total += (overflow * MUX_PENALTY_WEIGHT) # 超強力なペナルティ
+            total += MUX_PENALTY_WEIGHT
 
     return total
 
 
-def simulated_annealing(G, initial_pos, PAENodes, wirestat_final_set, grid_size_x=4, grid_size_y=4, initial_temp=1000, cooling_rate=0.995, iterations=100000):
-    
+def simulated_annealing(G, initial_pos, PAENodes, wirestat_final_set, grid_size_x=4, grid_size_y=4, initial_temp=1000,
+                        cooling_rate=0.995, iterations=100000, M=10000, w_ff=2, w_fb=10,MUX_PENALTY_WEIGHT=10000,SHARED_BONUS=-10000,
+                        MUX_SIZE_LIMIT=32, OmuxCost=0, w_io=0):    
     current_pos = initial_pos.copy()
     best_pos = current_pos.copy()
-    current_cost = total_cost(G, current_pos, PAENodes, wirestat_final_set)
+    current_cost = total_cost(G, current_pos, PAENodes, wirestat_final_set, M, w_ff, w_fb, 
+                              MUX_PENALTY_WEIGHT, SHARED_BONUS, MUX_SIZE_LIMIT, OmuxCost, w_io)
     best_cost = current_cost
     temp = initial_temp
 
@@ -228,8 +230,8 @@ def simulated_annealing(G, initial_pos, PAENodes, wirestat_final_set, grid_size_
         new_pos[node_to_move] = current_pos[node_to_swap]
         new_pos[node_to_swap] = current_pos[node_to_move]
         '''
-        
-        new_cost = total_cost(G, new_pos, PAENodes, wirestat_final_set)
+        new_cost = total_cost(G, new_pos, PAENodes, wirestat_final_set, M, w_ff, w_fb, 
+                              MUX_PENALTY_WEIGHT, SHARED_BONUS, MUX_SIZE_LIMIT, OmuxCost, w_io)
         cost_diff = new_cost - current_cost
 
         # 採否判定 (遷移ルール)
@@ -246,53 +248,57 @@ def simulated_annealing(G, initial_pos, PAENodes, wirestat_final_set, grid_size_
 
     return best_pos
 
-def main():
-    
+def main():  
     # --- 1. 初期化と初期設定 ---
-    wirestat_final_set = set()    #逐次学習用の「配線データベース」を初期化
+    wirestat_final_set = set()     #逐次学習用の「配線データベース」を初期化
     wireStats_total_usage = defaultdict(int) # wire_stats.txt用の合計使用回数
-    total_netlists_processed = 0
-    all_feedback_counts = []
 
     netlist_path_pattern = 'data/netlists_500/*.net'
     print(f"Starting Incremental SA (Sequential Learning) run...")
     print(f"Processing netlists from: {netlist_path_pattern}")
     
-    # SAパラメータの定義 
+    # SAパラメータ定義 
     ITERATIONS_COUNT = 100000
     COOLING_RATE = 0.995
     grid_size_x = 4
     grid_size_y = 4
 
-    #--- 2.SAの実行  ---
+    M_PARAM = 10000
+    W_FF_PARAM = 2
+    W_FB_PARAM = 10
+    MUX_PENALTY_WEIGHT_PARAM = 0
+    SHARED_BONUS_PARAM = -10000
+    MUX_SIZE_LIMIT_PARAM = 32
+    OMUX_COST_PARAM = 0
+    W_IO_PARAM = 0
+    #--- 2.SAの実行 ---
     for filename in tqdm.tqdm(glob.glob(netlist_path_pattern)):
         try:
             with open(filename) as f:
-                # ★ G と PAENodes の両方を取得 ★
                 G, PAENodes = parse_circuit(f.read())
         except Exception as e:
             print(f"Error parsing {filename}: {e}")
             continue
-        
+            
         #  pae_node 属性を G.nodes に追加 (コスト関数で参照するため) 
         for pn in PAENodes:
             if pn.name in G.nodes():
                 G.nodes[pn.name]['pae_node'] = pn
-        
+                
         initial_pos = initial_placement(G, grid_size_x, grid_size_y)
-        
-        # --- 3. SA本体に「現在の配線DB」を渡す ---
+            
+        # SA本体に「現在の配線DB」を渡す 
         optimized_pos = simulated_annealing(
-            G, initial_pos, PAENodes, wirestat_final_set,
-            grid_size_x=grid_size_x, grid_size_y=grid_size_y,
-            iterations=ITERATIONS_COUNT,
-            cooling_rate=COOLING_RATE
+            G, initial_pos, PAENodes, wirestat_final_set,grid_size_x=grid_size_x, grid_size_y=grid_size_y,
+            iterations=ITERATIONS_COUNT,cooling_rate=COOLING_RATE,
+            M=M_PARAM, w_ff=W_FF_PARAM, w_fb=W_FB_PARAM, MUX_PENALTY_WEIGHT=MUX_PENALTY_WEIGHT_PARAM,
+            SHARED_BONUS=SHARED_BONUS_PARAM,MUX_SIZE_LIMIT=MUX_SIZE_LIMIT_PARAM,OmuxCost=OMUX_COST_PARAM,w_io=W_IO_PARAM
         )
 
-        # --- 4. SAが使った「最終的な配線」を取得 ---
+        # SAが使った「最終的な配線」を取得 
         final_wires_for_this_netlist = get_wires(PAENodes, optimized_pos, G)
 
-        # --- 5. 「配線データベース」に新しい配線を追加 ---
+        # 「配線データベース」に新しい配線を追加 
         new_wires_added_count = 0
         for wire in final_wires_for_this_netlist:
             if wire not in wirestat_final_set:
@@ -302,9 +308,7 @@ def main():
         if new_wires_added_count > 0:
             print(f"  -> Added {new_wires_added_count} new wires to wirestat_final_set.")
 
-        # --- 6. 統計収集 ---
-        total_netlists_processed += 1
-        
+        # 統計収集
         # (フィードバック数の計算)
         feedback_count = 0
         internal_nodes = {n for n in G.nodes() if G.nodes[n].get('type') == 'internal'}
@@ -312,7 +316,6 @@ def main():
             if u in internal_nodes and v in internal_nodes and u in optimized_pos and v in optimized_pos: 
                 if optimized_pos[u][1] > optimized_pos[v][1]:
                     feedback_count += 1
-        all_feedback_counts.append(feedback_count)
 
         # (グラフ解析用の個別ファイル書き出し)
         output_dir = "individual_wire_results"
@@ -329,20 +332,19 @@ def main():
         # (wire_stats.txt用の合計使用回数を集計)
         compute_wireStats(final_wires_for_this_netlist, wireStats_total_usage)
 
-    # --- 7. 最終的な統計ファイルの書き出し ---
+    # --- 3. 最終的な統計ファイルの書き出し ---
     sortedWireStats = dict(sorted(wireStats_total_usage.items(), key=lambda item: item[1], reverse=True))
     print(f"\nTotal {len(sortedWireStats)} unique wires used (sum). Saving to wire_stats.txt...")
     with open("wire_stats.txt", "w") as f:
         for wire_tuple, count in sortedWireStats.items():
             f.write(f"{' '.join(map(str, wire_tuple))} {count}\n")
 
-    # --- 8. 最終アーキテクチャの構成メモリ評価 ---
+    # --- 4. 最終アーキテクチャの構成メモリ評価 ---
     print("\nAnalyzing final architecture configuration memory...")
-    
-    # wirestat_final_set は、このmain関数内で既に作成されているものを使用
     
     mux_internal_inputs = defaultdict(int)
     mux_external_inputs = defaultdict(int)
+    final_feedback_count = 0 # 最終フィードバック数をカウントする変数
     
     for wire in wirestat_final_set:
         src_x, src_y, src_pin, dst_x, dst_y, dst_pin = wire
@@ -352,9 +354,12 @@ def main():
             mux_external_inputs[mux_key] += 1
         else: # 内部セルからの配線
             mux_internal_inputs[mux_key] += 1
+            
+            # 内部配線の場合のみフィードバックかチェック
+            if src_y > dst_y:
+                final_feedback_count += 1
 
     total_conf_bits = 0
-    # 使用された全MUXのキー（重複なし）を取得
     all_mux_keys = set(mux_internal_inputs.keys()) | set(mux_external_inputs.keys())
     
     report_lines = []
@@ -377,7 +382,6 @@ def main():
         total_conf_bits += conf_bits
         mux_stats.append((mux_key, total_inputs, internal_count, external_count, conf_bits))
 
-    # 合計入力数が多い順にソート
     mux_stats.sort(key=lambda x: x[1], reverse=True)
 
     for stat in mux_stats[:20]: # 上位20件だけ表示
@@ -386,7 +390,10 @@ def main():
         report_lines.append(line)
         
     report_lines.append("...")
-    report_lines.append(f"\nTotal Configuration Bits (All MUXes): {total_conf_bits}")
+    
+    #  最終フィードバック数をレポートに追加
+    report_lines.append(f"\nTotal Feedback Wires in Final Architecture: {final_feedback_count}")
+    report_lines.append(f"Total Configuration Bits (All MUXes): {total_conf_bits}")
 
     # レポートをファイルとコンソールに出力
     cost_report_file = "final_architecture_cost.txt"

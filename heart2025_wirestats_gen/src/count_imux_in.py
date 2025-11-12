@@ -3,7 +3,7 @@ import math
 from collections import defaultdict
 
 
-#  設定項目 (ここでファイル名や閾値を調整します) 
+#  設定項目
 # ===================================================================
 # 読み込むファイル (SA_out.pyが出力した7要素のファイル)
 INPUT_FILE = "wire_stats.txt" 
@@ -12,7 +12,7 @@ INPUT_FILE = "wire_stats.txt"
 OUTPUT_FILE = "imux_in.txt"
 
 # 適用する閾値 (この使用回数「未満」の配線は間引かれます)
-THRESHOLD = 10  # (例: 10を指定すると、10回以上の配線が採用される)
+THRESHOLD = 3  # (例: 10を指定すると、10回以上の配線が採用される)
 
 # SA_out.pyで設定したグリッドサイズと合わせる
 GRID_X = 4
@@ -37,6 +37,7 @@ def main():
     # 2. wire_stats.txt を読み込み、閾値で振り分けながら集計
     try:
         with open(INPUT_FILE, 'r') as f:
+            
             for line in f:
                 total_lines += 1
                 if line.startswith("#"): continue

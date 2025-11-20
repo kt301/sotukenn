@@ -10,12 +10,9 @@ IMUX_COUNT_FILE = "imux_in.txt"
 # 最終的なアーキテクチャのファイル名
 OUTPUT_FILE = "wirestat_final.txt"
 # 閾値（count_imux_in.py の THRESHOLD と必ず「同じ値」にしてください）
-THRESHOLD = 10 
+THRESHOLD = 3 
 # 目標とするMUXの物理サイズ (2のべき乗)
 TARGET_POWER_OF_2 = True 
-# もし2のべき乗がこの値を超えたら、この値でキャップする
-# (例: 60本入力があった場合、64本ではなく32本に制限する)
-MUX_SIZE_CAP = 32
 # グリッドサイズとPIの総数 (物理ピンの生成に使用)
 GRID_X = 4
 GRID_Y = 4
@@ -24,8 +21,7 @@ NUM_PIS = 36
 
 def load_wire_stats(input_file, threshold):
     """
-    wire_stats.txt (7要素) を読み込み、
-    「採用された配線(set)」と「間引かれた配線(dict)」に分離する
+    wire_stats.txt (7要素) を読み込み、「採用された配線(set)」と「間引かれた配線(dict)」に分離する
     """
     kept_wires = set()     # 採用された内部配線 (set)
     # キー: MUX (dst_x, dst_y, dst_pin), 値: そのMUX宛の間引き配線のリスト
@@ -43,10 +39,9 @@ def load_wire_stats(input_file, threshold):
                 if len(parts) == 7:
                     count = int(parts[6])
                     
-                    # 6要素の配線タプルを作成
                     wire_tuple = (
-                        float(parts[0]) if '.' in parts[0] else int(parts[0]), # src_x (PIは小数)
-                        float(parts[1]) if '.' in parts[0] else int(parts[1]), # src_y
+                        int(parts[0]), # src_x
+                        int(parts[1]), # src_y
                         int(parts[2]), # src_pin
                         int(parts[3]), # dst_x
                         int(parts[4]), # dst_y
@@ -90,15 +85,10 @@ def load_imux_counts(input_file):
     print(f"Loaded {len(mux_counts)} MUX count entries from '{input_file}'.")
     return mux_counts
 
-def get_physical_pi_list(num_pins, grid_width):
-    """
-    SA_out.pyの整数座標ロジックに基づき、物理PIのリストを生成
-    ( (x, y, src_pin), ... )
-    """
+def get_physical_pi_list(num_pins): #SA_out.pyの整数座標ロジックに基づき、物理PIのリストを生成( (x, y, src_pin), ... )
     pins = []
     for i in range(num_pins):
-        x_coord = i % grid_width
-        pins.append((x_coord, -1, -1)) # (x, y, src_pin=-1)
+        pins.append((i, -1, -1)) # (x, src_y=-1, src_pin=-1)
     return pins
 
 def main():
@@ -112,15 +102,14 @@ def main():
         print("Cannot proceed without MUX count data.")
         return
 
-    # 3. 最終的なアーキテクチャ配線を構築 (まず採用された配線を入れる)
+    # 3. 配線の構築 (まず採用された配線を入れる)
     final_architecture_wires = kept_wires.copy()
     
-    print(f"Padding MUX inputs up to the next power of 2 (max {MUX_SIZE_CAP})...")
+    print(f"Padding MUX inputs up to the next power of 2...") 
     
-    # 利用可能な物理PIのリスト (整数座標)
-    physical_pis = get_physical_pi_list(NUM_PIS, GRID_X)
+    # 利用可能な物理PIのリスト
+    physical_pis = get_physical_pi_list(NUM_PIS)
     pi_to_add_index = 0
-    
     padded_wire_count = 0
     padded_pi_count = 0
 
@@ -132,16 +121,12 @@ def main():
             
         target_count = current_count
         if TARGET_POWER_OF_2:
-            # 目標とする2のべき乗の数を計算 (例: 13 -> 16, 30 -> 32)
+            # 目標とする2のべき乗の数を計算 (例: 13 -> 16, 30 -> 32, 34 -> 64)
             target_count = 2**math.ceil(math.log2(current_count))
-        
-        # ただし、ユーザ指定の最大目標（例: 32）を超えることは許さない
-        if target_count > MUX_SIZE_CAP:
-            target_count = MUX_SIZE_CAP
             
         slots_to_fill = target_count - current_count
         if slots_to_fill <= 0:
-            continue # 既に2のべき乗か、目標サイズを超えている
+            continue # 既に2のべき乗
 
         # --- パディング実行 ---
         filled_count = 0
@@ -173,18 +158,14 @@ def main():
     print(f"Saving final architecture to '{OUTPUT_FILE}'...")
     with open(OUTPUT_FILE, 'w') as f:
         f.write(f"# Final architecture: {len(final_architecture_wires)} unique wires\n")
-        f.write(f"# (Based on '{STATS_FILE}' w/ threshold {THRESHOLD}, padded to {MUX_SIZE_CAP})\n")
+        f.write(f"# (Based on '{STATS_FILE}' w/ threshold {THRESHOLD}, padded to next power-of-2)\n")
         
-        # (x, y, pin) でソートして、見やすくする
         sorted_wires = sorted(list(final_architecture_wires)) 
         
         for wire in sorted_wires:
-             # PIは (0, -1, -1, ...) のように整数で保存する
              f.write(" ".join(map(str, wire)) + "\n")
              
     print("Done.")
 
 if __name__ == "__main__":
-    # SA_out.pyの整数座標ロジックに合わせて、PIも整数で扱う
-    # (load_wire_stats と get_physical_pi_list で対応済み)
     main()

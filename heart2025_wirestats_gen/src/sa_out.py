@@ -254,6 +254,9 @@ def main():
     wireStats_total_usage = defaultdict(int) # wire_stats.txt用の合計使用回数
 
     netlist_path_pattern = 'data/netlists_500/*.net'
+    all_netlist_files = glob.glob(netlist_path_pattern) # 1. リストを取得
+    random.seed(1) # 2. ★ここをファイルごとに変える★ (1, 2, 3...)
+    random.shuffle(all_netlist_files) # 3. シードに基づいてシャッフル
     print(f"Starting Incremental SA (Sequential Learning) run...")
     print(f"Processing netlists from: {netlist_path_pattern}")
     
@@ -267,7 +270,7 @@ def main():
     W_FF_PARAM = 2
     W_FB_PARAM = 10
     MUX_PENALTY_WEIGHT_PARAM = 0
-    SHARED_BONUS_PARAM = -10000
+    SHARED_BONUS_PARAM = -10
     MUX_SIZE_LIMIT_PARAM = 32
     OMUX_COST_PARAM = 0
     W_IO_PARAM = 0
@@ -363,6 +366,23 @@ def main():
     all_mux_keys = set(mux_internal_inputs.keys()) | set(mux_external_inputs.keys())
     
     report_lines = []
+    report_lines.append("========================================================")
+    report_lines.append(f"--- Configuration Memory Analysis ---")
+    report_lines.append("========================================================")
+    report_lines.append(f"[Execution Parameters]")
+    report_lines.append(f"  Iterations:       {ITERATIONS_COUNT}")
+    report_lines.append(f"  Cooling Rate:     {COOLING_RATE}")
+    report_lines.append(f"  Grid Size:        {grid_size_x} x {grid_size_y}")
+    report_lines.append(f"")
+    report_lines.append(f"[Cost Function Weights]")
+    report_lines.append(f"  Shared Bonus:     {SHARED_BONUS_PARAM} (Rule 3)")
+    report_lines.append(f"  Adjacency Bonus:  {M_PARAM} (Rule 1: -M)")
+    report_lines.append(f"  Skip Penalty:     {W_FF_PARAM} (w_ff)")
+    report_lines.append(f"  Feedback Penalty: {W_FB_PARAM} (w_fb)")
+    report_lines.append(f"  MUX Penalty:      {MUX_PENALTY_WEIGHT_PARAM} (Limit: {MUX_SIZE_LIMIT_PARAM})")
+    report_lines.append(f"  New PI Penalty:   {W_IO_PARAM} (w_io)")
+    report_lines.append("========================================================")
+    report_lines.append(f"")
     report_lines.append(f"--- Configuration Memory Analysis (based on {len(wirestat_final_set)} unique wires) ---")
     report_lines.append(f"Total unique MUX ports used: {len(all_mux_keys)}")
     report_lines.append("\nDetailed MUX Input Breakdown (Top 20 most inputs):")
@@ -396,7 +416,7 @@ def main():
     report_lines.append(f"Total Configuration Bits (All MUXes): {total_conf_bits}")
 
     # レポートをファイルとコンソールに出力
-    cost_report_file = "final_architecture_cost.txt"
+    cost_report_file = "final_architecture_cost2.txt"
     print(f"\nSaving configuration memory analysis to '{cost_report_file}'...")
     with open(cost_report_file, "w") as f:
         for line in report_lines:

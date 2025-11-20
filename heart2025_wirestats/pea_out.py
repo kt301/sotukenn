@@ -3,29 +3,77 @@ import argparse
 import subprocess
 import math
 import graphviz
-import GraphLegends as GL # (GraphLegends.pyが同じディレクトリにある前提)
+import GraphLegends as GL
 import re
-import os # ★ os をインポート
-from collections import defaultdict # ★ defaultdict をインポート
+import os 
+from collections import defaultdict 
 
-# ==================================================================
-# ★ ブロック1: 従来の pea.py のクラス定義群 ★
-# (WireStatsクラスは不要になったので削除)
-# ==================================================================
+# ------------------------------------------------------------------
+# WireStats読み込みパート
+# ------------------------------------------------------------------
+class WireStat:
+    def __init__(self, src_x, src_y, src_outnum, dst_x, dst_y, dst_innum, count=1):
+        self.src_x = src_x
+        self.src_y = src_y
+        self.src_outnum = src_outnum # PIの場合は-1が入る想定
+        self.dst_x = dst_x
+        self.dst_y = dst_y
+        self.dst_innum = dst_innum   # PAE入力ピン
+        self.count = count           # ファイルにはないためデフォルト1
 
-# --- WireStatクラスは不要 ---
+class WireStats: 
+    def __init__(self, filename):
+        self.stats = []
+        self.readFromFile(filename)
+    
+    def readFromFile(self, filename): 
+        numTargetWires = 0
+        print(f"Loading architecture structure from {filename}...")
+        try:
+            with open(filename, 'r') as f:
+                for line in f:
+                    # コメントと空行の処理
+                    if line.startswith("#") or not line.strip(): 
+                        continue
+                    
+                    try:
+                        parts = [int(s) for s in line.split()]
+                        
+                        # 6要素のみを対象とする
+                        if len(parts) == 6:
+                            # 引数: src_x, src_y, src_outnum, dst_x, dst_y, dst_innum, (count=1)
+                            ws = WireStat(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], 1)
+                            self.stats.append(ws)
+                            numTargetWires += 1
+                        
+                    except (ValueError, IndexError):
+                        continue
+                        
+        except FileNotFoundError:
+            print(f"Error: Statistics file '{filename}' not found.")
+            exit(1)
 
+        print(f"numTargetWires={numTargetWires} (Loaded from file)")
+
+
+
+'''
+ 部品の定義
+'''
 class PI: # PEA論理(レーンの集合)への外部入力
     count = 0    
     def __init__(self):
         self.count = PI.count  # PIのID番号
-        PI.count += 1      
+        PI.count += 1        
         self.name = self.name()
         self.dsts = [] # PIの接続先(IMUX)
+
     def name(self):
-        return f"I{self.count}"
+        name = "I{}".format(self.count)
+        return name
+        
     def show(self):
-        print(f"Primary Input {self.name}")
+        print("Primary Input {}".format(self.name))
 
 class PO: # PEA論理(レーンの集合)からの外部出力
     count = 0
@@ -34,101 +82,154 @@ class PO: # PEA論理(レーンの集合)からの外部出力
         PO.count += 1
         self.name = self.name()
         self.srcs = [] # POの接続元(PEAOutput/OMUX)
+
     def name(self):
-        return f"O{self.count}"
+        name = "O{}".format(self.count)
+        return name
+        
     def show(self):
-        print(f"Primary Output {self.name}")
+        print("Primary Output {}".format(self.name))
+
 
 class IMUX: # PAEセルの入力に付加される入力MUX
     def __init__(self, paecell, inputNum, maxIn=4):
-        self.inputs = []       
-        self.maxIn = maxIn       
-        self.paecell = paecell   
-        self.inputNum = inputNum 
+        self.inputs = []          # IMUXの入力リスト(前段レーンの出力MUXなど)
+        self.maxIn = maxIn        # IMUXの最大入力数
+        self.paecell = paecell    # 所属するPAEセル
+        self.inputNum = inputNum  # PAEセルにおける入力番号
         self.name = self.name()
-    def numConfBits(self): 
-        if len(self.inputs) <= 1: return 0 # 1入力は配線とみなす
+
+    def numConfBits(self):  # 必要なコンフィギュレーションビットを計算
         return math.ceil(math.log2(len(self.inputs)))
-    def name(self):
-        return f"IMUX{self.inputNum}_PAE{self.paecell.count}_lane{self.paecell.lane.count}"
+
+    def name(self):           # IMUXの名前を表示
+        name = "IMUX{}_PAE{}_lane{}".format(self.inputNum, self.paecell.count, self.paecell.lane.count)
+        return name
+    
     def show(self):
         print(self.name)
-
+        #print("-- inputs to IMUX begin")
+        #for i in self.inputs:
+        #    i.show()
+        #print("-- inputs to IMUX end")
+            
 class OMUX: # レーンの出力に付加される出力MUX
     count = 0
     def __init__(self, lane, withFF=False, skipLengths=None):
-        self.count = OMUX.count
+        self.count = OMUX.count  # OMUXの番号(PAELogic全体での通し番号)
         OMUX.count += 1
-        self.lane = lane      
-        self.inputs = []      
-        self.dsts = []      
-        self.withFF = withFF  
-        self.skipLengths = skipLengths 
+        self.lane = lane      # 所属するレーン
+        self.inputs = []      # OMUXの入力リスト(PAEの出力) 一つの場合もある
+        self.dsts = []        # OMUX出力の接続先(IMUX/PO)
+        self.withFF = withFF  # 出力にFFを不可するか
+        self.skipLengths = skipLengths # どれだけ離れたレーンに接続するか
+                              # 0:現在(所属)、-1:１個前, +1: 次段(通常接続)
+                              # +2:一個飛ばした後段レーン
         self.name = self.name()
-    def numConfBits(self):
-        if len(self.inputs) <= 1: return 0
+
+    def numConfBits(self):  # 必要なコンフィギュレーションビットを計算
         return math.ceil(math.log2(len(self.inputs)))
-    def name(self):
-        return f"OMUX{self.count}_lane{self.lane.count}"
+
+    def name(self):           # OMUXの名前を表示
+        name = "OMUX{}_lane{}".format(self.count, self.lane.count)
+        return name
+        
+                              
     def show(self):
         print(self.name)
+        #print(f"OMUX[{self.count}] for lane[{self.lane.count}]",end="")
+        if self.skipLengths != None:
+            print(" : OMUX for skip connections", end="")
+        else:
+            print("", end="")
+        #print("OMUX inputs")
+        #for i in self.inputs:
+        #    i.show()
+
 
 class PAEOutput: # PAEセルの出力
     def __init__(self, paecell, outputNum):
         self.paecell = paecell
-        self.outputNum = outputNum 
-        self.dsts = []           
+        self.outputNum = outputNum # PAEセルにおける出力番号  
+        self.dsts = []             # PAEOutputの接続先(OMUX/PO)
         self.name = self.name()
-    def name(self):
-        return f"OutPort{self.outputNum}_PAE{self.paecell.count}_lane{self.paecell.lane.count}"
-    def show(self):
-        print(self.name)
+        
 
+    def name(self):                # PAEOutputの名前を表示
+        name = "OutPort{}_PAE{}_lane{}".format(self.outputNum, self.paecell.count, self.paecell.lane.count)
+        return name
+
+
+    def show(self):
+        #print("-----start printing PAEOutput")
+        print(self.name)        
+        #print("Destinations")
+        #for m in self.dsts:
+        #    m.show()
+        #print("-----end printing PAEOutput")            
+        
 class PAECell: # PAEセル
     count = 0
-    def __init__(self, lane, nPAEin=4, nPAEout=3): # ★ nPAEout=3 に変更
-        self.count = PAECell.count 
+    def __init__(self, lane, nPAEin=4, nPAEout=1):
+        self.count = PAECell.count  # PEAセル番号
         PAECell.count += 1
-        self.lane = lane       
-        self.nPAEin = nPAEin     
-        self.nPAEout = nPAEout   
-        self.IMUXes = []         
-        self.outputs = []        
+        self.lane = lane            # 所属するレーン
+        self.nPAEin = nPAEin        # 入力数
+        self.nPAEout = nPAEout      # 出力数
+        self.IMUXes = []            # 入力MUXのリスト
+        self.outputs = []           # このPAEセルの出力(PAEOutput)のリスト
+        #print(f"CCCC nPAEin={nPAEin}")        
         self.buildIMUXes(nPAEin)
         self.buildOutputs(nPAEout)
         self.name = self.name()
-    def buildIMUXes(self, nPAEin):  
+
+    def buildIMUXes(self, nPAEin):   # 入力MUXを準備
+        #print(f"BBBB nPAEin={nPAEin}")
         for i in range(nPAEin):
             self.IMUXes.append(IMUX(self, i))
-    def buildOutputs(self, nPAEout): 
+
+    def buildOutputs(self, nPAEout):  # 出力を準備
         for i in range(nPAEout):
             self.outputs.append(PAEOutput(self,i))
-    def name(self):
-        return f"PAE{self.count}_lane{self.lane.count}"
+
+    def name(self):           # PAECellの名前を表示
+        name = "PAE{}_lane{}".format(self.count, self.lane.count)
+        return name
+
+            
     def show(self):
         print(f"lane[{self.lane.count}]: PAECell[{self.count}]")
+        #for m in self.IMUXes:
+        #    m.show()
 
+'''
+ SATの変数定義
+'''
 class Var: # SAT変数
-    count = 1
+    count = 1 # SATソルバーで、0は特別な区切り文字を表すので、1からスタート
     def __init__(self, mgr):
-        self.count = Var.count
+        self.count = Var.count   # 変数のID番号
         Var.count += 1
         self.mgr = mgr
+
     @classmethod
     def numVars(cls):
-       return cls.count-1 
+       return cls.count-1 # 変数をすべて作りおえて、Var.countを+1してるので、その分を引く
+
     def cnfStr(self):
-        return f"{self.count}"
+        return "{}".format(self.count)
 
 class BindVar(Var):
     def __init__(self, mgr, instance, target):
         super().__init__(mgr)
-        self.instance = instance 
-        self.target = target   
+        self.instance = instance  # Netlistのnode(PAEInstance, netlistPI/PO)
+        self.target = target      # PAE Logicのブロック(PAECell, PI/PO)
         self.name = self.name()
         mgr.vars[self.count] = self
+
     def name(self):
-        return f"b_{self.instance.name}_{self.target.name}"
+        name = "b_" + self.instance.name + "_" + self.target.name
+        return name
 
 class ConnectVar(Var):
     def __init__(self, mgr, src, omux, dst):
@@ -137,23 +238,27 @@ class ConnectVar(Var):
         self.omux = omux
         self.dst = dst
         self.name = self.name()
-        mgr.vars[self.count] = self
+        mgr.vars[self.count] = self        
+
     def name(self):
-        name = f"c_{self.src.name}"
+        name = "c_" + self.src.name
         if self.omux != None:
-            name += f"--{self.omux.name}"
-        name += f"--{self.dst.name}"
+            name += "--" + self.omux.name
+        name += "--" + self.dst.name
         return name
         
-class OMUXUseVar(Var):
+class OMUXUseVar(Var): # OMUX omuxが使われるときに、1となる
     def __init__(self, mgr, src, omux):
         super().__init__(mgr)
         self.src = src
         self.omux = omux
         self.name = self.name()
         mgr.vars[self.count] = self
+
     def name(self):
-        return f"u_{self.src.name}--{self.omux.name}"
+        name = "u_" + self.src.name
+        name += "--" + self.omux.name
+        return name
 
 class WireVar(Var):
     def __init__(self, mgr, src, dst):
@@ -161,108 +266,79 @@ class WireVar(Var):
         self.src = src
         self.dst = dst
         self.name = self.name()
-        mgr.vars[self.count] = self
-    def name(self):
-        return f"w_{self.src.name}--{self.dst.name}"
+        mgr.vars[self.count] = self        
 
-class Interconnect:
+    def name(self):
+        name = "w_" + self.src.name + "--" + self.dst.name
+        return name
+
+
+# ------------------------------------------------------------------
+# eFPGA関係のクラス（wirestatをもとに物理的な配線を組み立てている）
+# ------------------------------------------------------------------
+        
+class Interconnect:      # PEA Logic内の配線(wirestat読み込んで分類してるだけ)
     count = 0
     def __init__(self, src, omux, dst):
-        self.count =Interconnect.count
-        Interconnect.count += 1
-        self.src = src
-        self.omux = omux 
-        self.dst = dst
-    def show(self):
-        print(f"Interconnect (id={self.count}) {self.src.name} -> ", end="")
-        if self.omux != None:
-            print(f"{self.omux.name} ->", end="")
-        print(f"{self.dst.name} ")
+        self.count =Interconnect.count     # インターコネクト番号 (0,1,2,...)
+        Interconnect.count += 1                
+        self.src = src   # 接続元(PAE出力, PI)        
+        self.omux = omux # 途中経由のOMUX (Noneの場合もあり)
+        self.dst = dst   # 接続先(IMUX, PO)
 
+    def show(self):
+        print("Interconnect (id={}) {} -> ".format(self.count, self.src.name), end="")
+        if self.omux != None:
+            print("{} ->".format(self.omux.name), end="")        
+        print("{} ".format(self.dst.name))
+        
 class PEALogic:
-    def __init__(self, numPIs=8, numPOs=-1):
+    def __init__(self, numPIs=36, numPOs=-1):
         self.lanes = []
         self.numPIs = numPIs
-        self.numPOs = numPOs
+        self.numPOs = numPOs 
         self.PAEOutputs = []
         self.PAECells = []
         self.OMUXes = []
-        self.skipOMUXes = []
+        self.skipOMUXes = [] # (使わないが空リストで残す)
         self.IMUXes = []
         self.PIs = []
         self.POs = []
-        self.Interconnects = []
+        self.Interconnects = [] #配線のリスト
         self.buildPIs()
         if self.numPOs != -1:
             self.buildPOs()
 
-    # ( ... 従来の connectPIs, connectPItoMUX などは削除しても良い ... )
-    
-    # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-    # ★★★ pea_out.py のための新しいメソッド ★★★
-    # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-    
+    #　1:外部入力　→　MUX
     def connectPI_wire(self, pi_object, dst_x, dst_y, dst_pin):
-        """
-        指定されたPIオブジェクトを、指定された宛先IMUXに接続する
-        """
         try:
-            # 座標から対象のPAEセルとIMUXを特定
             dstPAE = self.lanes[dst_y].PAECells[dst_x]
             imux = dstPAE.IMUXes[dst_pin]
-            
-            # 接続を実行
             imux.inputs.append(pi_object)
             pi_object.dsts.append(imux)
-            
-        except IndexError:
-            # 座標やピン番号がグリッド範囲外の場合
-            print(f"Warning: Failed to connect PI. Invalid destination: ({dst_x},{dst_y}), pin {dst_pin}")
         except Exception as e:
             print(f"Warning: Error connecting PI wire: {e}")
 
-    # ★ 内部配線接続用の connectPAEs (従来通り) ★
+    #  2:MUX　→　MUX（内部配線の接続）
     def connectPAEs(self, src_x, src_y, src_outnum, dst_x, dst_y, dst_innum):
         try:
-            srcPAE = self.lanes[src_y].PAECells[src_x]
+            # PAE出力ピンに対応するOMUXを特定
+            srcLane = self.lanes[src_y]
+            omux_index = (src_x * 3) + src_outnum 
+            if omux_index >= len(srcLane.OMUXes): # 例外処理
+                print(f"Error: OMUX index {omux_index} out of range.")
+                return
+            omux = srcLane.OMUXes[omux_index]
             dstPAE = self.lanes[dst_y].PAECells[dst_x]
             imux = dstPAE.IMUXes[dst_innum]
             
-            # OMUXを自動で見つける (sa_out.pyのロジックに合わせる)
-            omux = None
-            for dst in srcPAE.outputs[src_outnum].dsts:
-                if isinstance(dst, OMUX) and dst.skipLengths is None:
-                    omux = dst
-                    break
-            
-            if omux is None:
-                # print(f"Warning: No 1-input OMUX found for {srcPAE.name} output {src_outnum}")
-                # (Note: Lane()コンストラクタでOMUXが自動接続される前提)
-                # 暫定的に、LaneのOMUXリストから該当するものを探す
-                # (sa_out.pyの Lane コンストラクタは nPAEout * nPAECells = 12 個のOMUXを作り、
-                #  PAEの出力と1対1で接続する前提のため)
-                
-                # PAEの出力ピン総数 (0..11) に基づいてOMUXを特定する
-                pae_index_in_lane = self.lanes[src_y].PAECells.index(srcPAE)
-                omux_index = pae_index_in_lane * srcPAE.nPAEout + src_outnum
-                if omux_index < len(self.lanes[src_y].OMUXes):
-                    omux = self.lanes[src_y].OMUXes[omux_index]
-                
-            if omux:
-                imux.inputs.append(omux)
-                omux.dsts.append(imux)
-            else:
-                print(f"Error: Could not find matching OMUX for wire.")
-        
+            imux.inputs.append(omux)
+            omux.dsts.append(imux)
+
         except Exception as e:
             print(f"Error connecting PAE wire: {e}")
 
-    # ( ... buildPIs, buildPOs, addLane, generateAndconnectPOs, enumerateInterconnects ... )
-    # ( ... saveGraph, saveGraph_AC は pea.py と同じ ... )
-    # ( ... (省略) ... )
-    
     def buildPIs(self): 
-        print(f"building PIs {self.numPIs}")
         for i in range(self.numPIs):
             self.PIs.append(PI())
 
@@ -273,19 +349,23 @@ class PEALogic:
     def addLane(self, lane):
         self.lanes.append(lane)
 
+
+    # 3:外部出力
     def generateAndconnectPOs(self, directOutput=True, outputLastLane=False):
-        for l in self.lanes:
-            for omux in l.OMUXes:
-                if omux not in self.OMUXes: self.OMUXes.append(omux)
-            for skipomux in l.skipOMUXes: 
-                if skipomux not in self.skipOMUXes: self.skipOMUXes.append(skipomux)
-            for pc in l.PAECells:
-                if pc not in self.PAECells: self.PAECells.append(pc)
-                for o in pc.outputs:
-                    if o not in self.PAEOutputs: self.PAEOutputs.append(o)
-                for i in pc.IMUXes:
-                    if i not in self.IMUXes: self.IMUXes.append(i)
+        # 部品収集 (LaneからPEALogicへリストアップ)
+        self.OMUXes = []
+        self.PAECells = []
+        self.PAEOutputs = []
+        self.IMUXes = []
         
+        for l in self.lanes:
+            self.OMUXes.extend(l.OMUXes)
+            self.PAECells.extend(l.PAECells)
+            for pc in l.PAECells:
+                self.PAEOutputs.extend(pc.outputs)
+                self.IMUXes.extend(pc.IMUXes)
+
+        # PO接続
         PAEOutputsToConnect = []
         if directOutput == True:
             if outputLastLane == True:
@@ -299,501 +379,1657 @@ class PEALogic:
                 self.POs.append(po)
                 o.dsts.append(po)
                 po.srcs.append(o)
-        else:
-            pass # (POが事前に作られている場合のロジック)
 
+    # SAT用にリストアップ
     def enumerateInterconnects(self):
-        # (OMUXを通す)
+        # OMUX -> IMUX/PO
         for omux in self.OMUXes:
-            for s in omux.inputs:
-                for d in omux.dsts:
+            for s in omux.inputs: # src (PAEOutput)
+                for d in omux.dsts: # dst (IMUX)
                     self.Interconnects.append(Interconnect(s, omux, d))
-        # (SkipOMUXを通す)
-        for skipomux in self.skipOMUXes:
-            for s in skipomux.inputs:
-                for d in skipomux.dsts:
-                    self.Interconnects.append(Interconnect(s, skipomux, d))
-        # (PI -> IMUX/PO)
+
+        # PI -> IMUX 
         for pi in self.PIs:
             for d in pi.dsts:
-                if type(d) is IMUX or type(d) is PO:
+                if type(d) is IMUX:
                     self.Interconnects.append(Interconnect(pi, None, d))
-        # (PAEOutput -> PO)
+
+        # PAEOutput -> PO (直接出力の場合)
         for o in self.PAEOutputs:
             for d in o.dsts:
                 if type(d) is PO:
                     self.Interconnects.append(Interconnect(o, None, d))
-
-# --- Lane クラス (変更なし) ---
+                    
 class Lane:
     count = 0
-    def __init__(self, nPAECells=4, nIMUXins=4, nOMUXes=6, nOMUXins=2, nPAEin=4, nPAEout=3, noOMUX=False, nSkipOMUXes=0, skips = None):
-        self.count =Lane.count
-        Lane.count += 1
-        self.nPAECells = nPAECells 
-        self.nOMUXes = nOMUXes
-        self.PAECells = []
-        self.OMUXes = []
-        self.nPAEin = nPAEin
-        self.nPAEout = nPAEout
-        self.skips = skips
-        self.skipOMUXes = []
-        
-        # ★ sa_out.py のロジックに合わせ、OMUXは (nPAEout * nPAECells) 個作る
-        if noOMUX == False:
-            self.nOMUXes = nPAEout * nPAECells
-        
+    def __init__(self, nPAECells=4, nIMUXins=4, nOMUXes=12, nOMUXins=2, nPAEin=4, nPAEout=3, noOMUX=False, nSkipOMUXes=0, skips = None):
+        self.count =Lane.count     # レーン番号 (0,1,2,...)
+        Lane.count += 1        
+        self.nPAECells = nPAECells # PAEセル数
+        self.nOMUXes = nOMUXes     # 出力MUX数
+        self.nIMUXins = nIMUXins   # 入力MUXの入力数(レーンで共通と仮定) -> この前提は外す (wirestatsを使うため) (nIMUXinsは使われていない。気にする必要なし)
+        self.nOMUXins = nOMUXins   # 出力MUXの入力数(レーンで共通と仮定) (nOMUXinsは使われていない。気にする必要なし)
+        self.PAECells = []         # PAEセルのリスト
+        self.OMUXes = []           # 出力MUXのリスト
+        self.nPAEin = nPAEin       # PEAセルの入力数
+        self.nPAEout = nPAEout     # PEAセルの出力数
+        #self.nOMUXes = nPAEout * nPAECells # PAE Cellの出力数3×PAE Cell数に設定（OMUX無しにするため）
+
         self.buildPAECells(nPAECells, nPAEin, nPAEout)
         if noOMUX == False:
-            self.buildOMUXes(self.nOMUXes)
-            # ★ sa_out.py のロジックに合わせ、1対1で接続する
-            self.connectPAEOutputToOMUX(noOMUX=True)
-        if skips != None:
-             pass # (今回はskipOMUXesは使わない)
+            self.buildOMUXes(nOMUXes)
+            self.connectPAEOutputToOMUX()
 
     def buildPAECells(self, nPAECells, nPAEin, nPAEout):
         for i in range(nPAECells):
+            print(f"nPAEout = {nPAEout}")
             self.PAECells.append(PAECell(self, nPAEin, nPAEout))
+        #PAECell.count = 0      # カウンタをリセット
     
+    # レーン内に出力MUXを作る
     def buildOMUXes(self,nOMUXes):
         for i in range(nOMUXes):
             self.OMUXes.append(OMUX(self))
 
-    def connectPAEOutputToOMUX(self, fullConnection = True, noOMUX = True):
-        outputs = [o for p in self.PAECells for o in p.outputs]
-        if noOMUX is True: 
-            # 1入力OMUXをPAE出力と1対1で接続
-            for i, omux in enumerate(self.OMUXes):
-                if i < len(outputs):
-                    omux.inputs.append(outputs[i])
-                    outputs[i].dsts.append(omux)
-        else:
-             # (従来のフル接続や部分接続ロジック)
-             pass
-    
+    # 出力MUXの入力にPAEセルの出力を接続する
+    def connectPAEOutputToOMUX(self):         
+        print("##### connectPAEOutputToOMUX() ####")
+        outputs = []
+        for p in self.PAECells:
+            for o in p.outputs:
+                outputs.append(o)
+                       
+        for i, omux in enumerate(self.OMUXes):
+            omux.inputs.append(outputs[i])
+            outputs[i].dsts.append(omux)      
+
+    '''
+    #デバッグ関連の表示機能（コメントアウトしても問題なし）
+    '''                
     def show(self):
-        print(f"--- start printing lane {self.count} ---")
-        for p in self.PAECells: p.show()
-        for m in self.OMUXes: m.show()
+        print("--- start printing lane")
+        print(f"cnt={self.count}, nPAECells={self.nPAECells}, nIMUXins={self.nIMUXins},\
+        noMUX={self.nOMUXes},nOMUXins={self.nOMUXins}")
+        for p in self.PAECells:
+            p.show()
+            for o in p.outputs:
+                o.show()
+        for m in self.OMUXes:
+            m.show()
+        print("\n--- end printing lane")
 
-# --- Netlist, SATmgr, etc. クラス群 (変更なし) ---
-# ( ... 従来のpea.pyからそのままコピー ... )
-# ( ... (長いので省略) ... )
+    def showConnections(self): #他のレーンからの接続を表示
+        print("Showing connections for lane{}".format(self.count))
+        for i, p in enumerate(self.PAECells):
+            for j, m in enumerate(p.IMUXes):
+                m.show()
 
-# (Netlistクラスの定義)
-class NetlistPI:
+# ------------------------------------------------------------------
+# ネットリスト関係のクラス
+# ------------------------------------------------------------------
+
+
+class NetlistPI:  # ネットリストの外部入力
     count = 0
-    def __init__(self, netlist, name): self.count=NetlistPI.count; NetlistPI.count+=1; self.netlist=netlist; self.name=name; self.fanouts=[]
-    def show(self): print(f"PI[{self.name}]",end="")
-class NetlistPO:
+    def __init__(self, netlist, name):
+        self.count = NetlistPI.count  # PI/POのID番号
+        NetlistPI.count += 1
+        self.netlist = netlist # PIが所属するネットリスト
+        self.name = name       # PIの名前
+        self.fanouts = []      # PIの場合のみ: ファンアウト(外部出力か、PAEの入力(何番目)か)
+
+    def show(self):
+        print(f"PI[{self.name}]",end="")
+
+
+class NetlistPO:  # ネットリストの外部出力
     count = 0
-    def __init__(self, netlist, name): self.count=NetlistPO.count; NetlistPO.count+=1; self.netlist=netlist; self.name=name; self.input=None
-    def show(self): print(f"PO[{self.name}]",end="")
-class PAEInstanceInput:
-    def __init__(self, pae, inputNum): self.PAEInstance=pae; self.inputNum=inputNum
-    def show(self): print(f"PAE[{self.PAEInstance.name}].in[{self.inputNum}]",end="")
-class PAEInstanceOutput:
-    def __init__(self, name, pae, outputNum): self.name=name; self.PAEInstance=pae; self.outputNum=outputNum
-    def show(self): print(f"PAE[{self.PAEInstance.name}].out[{self.outputNum}]",end="")
-class PAEInstance:
+    def __init__(self, netlist, name):
+        self.count = NetlistPO.count  # PI/POのID番号
+        NetlistPO.count += 1
+        self.netlist = netlist # POが所属するネットリスト
+        self.name = name       # POの名前
+        self.input = None      # POの場合のみ: どのPAEインスタンスの出力/PIが入ってくるか
+
+    def show(self):
+        print(f"PO[{self.name}]",end="")
+
+        
+        
+class PAEInstanceInput: # PAEインスタンスの入力
+    def __init__(self, pae, inputNum):
+        self.PAEInstance = pae     # どのPAEインスタンスの入力か
+        self.inputNum = inputNum   # 何番目の入力か
+
+    def show(self):
+        print("PAE[{}].in[{}]".format(self.PAEInstance.name, self.inputNum),end="")
+
+        
+class PAEInstanceOutput: # PAEインスタンスで新たに生成される中間出力t1, t2, ..
+    def __init__(self, name, pae, outputNum):
+        self.name = name           # 入力ファイルでの名前 (t1, t2, ...)
+        self.PAEInstance = pae     # どのPAEインスタンスの出力か
+        self.outputNum = outputNum # 何番目の出力か
+        
+    def show(self):
+        print("PAE[{}].out[{}]".format(self.PAEInstance.name, self.outputNum),end="")
+        
+
+class PAEInstance:  # ネットリストのPAEインスタンス
     count = 0
-    def __init__(self, netlist, name): self.count=PAEInstance.count; PAEInstance.count+=1; self.netlist=netlist; self.name=name; self.inputNames=[]; self.outputNames=[]; self.inputs=[]; self.outputs=[]; self.fanouts=[]; self.initFanouts()
-    def initFanouts(self):
-        for i in range(self.netlist.numPAEoutputs): self.fanouts.append([])
-    def show(self): print(f"PAEInstance [{self.name}]")
+    def __init__(self, netlist, name):
+        self.count = PAEInstance.count  # PAEインスタンスID番号
+        PAEInstance.count += 1
+        self.netlist = netlist   # ノードが所属するネットリスト
+        self.name = name         # PAEインスタンス名
+        self.inputNames = []     # ノードの入力(名前)(読み込み用)
+        self.outputNames = []    # ノードの出力(名前)(読み込み用)
+        self.inputs = []         # 入力リスト(外部入力か、PAEの出力(何番目)か, None)
+        self.outputs = []        # 出力リスト(外部出力か、PAEの入力(何番目)か, None)
+        self.fanouts = []        # 各出力のファンアウト(外部出力か、PAEの入力(何番目)か)
+        self.initFanouts()
+
+
+    def initFanouts(self): # 出力数分のfanoutリストを作る
+        numPAEoutputs = self.netlist.numPAEoutputs
+        for i in range(numPAEoutputs):
+            fanouts = []
+            self.fanouts.append(fanouts)
+
+    def show(self):
+        print(f"PAEInstance [{self.name}]")
+
+    def showFanouts(self):
+        print(f"Fanouts for PAEInstance [{self.name}]")
+        for i, fo in enumerate(self.fanouts):
+            
+            print("{}-th fanout :".format(i), end="")
+            for e in fo:
+                e.show()
+                print("  ",end="")
+            print("\n")
+        
+
+
 class Wire:
     count = 0
-    def __init__(self, netlist, srcname, dstname): self.count=Wire.count; Wire.count+=1; self.srcname=srcname; self.dstname=dstname
+    def __init__(self, netlist, srcname, dstname):
+        self.count = Wire.count  # wireのID番号
+        Wire.count += 1
+        self.srcname = srcname   # 配線の送信元(PAE出力/PI)の名前
+        self.dstname = dstname   # 配線の送信先(PAE入力/PO)の名前
+        
+
 class Edge:
     count = 0
-    def __init__(self, netlist, src, dst): self.count=Edge.count; Edge.count+=1; self.src=src; self.dst=dst
-    def show(self): print(f"edge[{self.count}]: ", end=""); self.src.show(); print(" -> ",end=""); self.dst.show(); print("\n")
+    def __init__(self, netlist, src, dst):
+        self.count = Edge.count  # edgeのID番号
+        Edge.count += 1
+        self.src = src   # エッジの元(PAE出力/PI)
+        self.dst = dst   # エッジの先(PAE入力/PO)
+        
+    def show(self):
+        print("edge[{}]: ".format(self.count), end="")
+        self.src.show()
+        print(" -> ",end="")
+        self.dst.show()
+        print("\n")
+
+        
 class Netlist:
-    def __init__(self, filename, numPAEinputs = 4, numPAEoutputs = 3): # ★ nPAEout=3 に変更
-        self.numPIs=-1; self.numPOs=-1; self.numPAEinputs=numPAEinputs; self.numPAEoutputs=numPAEoutputs; self.netlistPIs={}; self.netlistPOs={}; self.PAEInstances={}; self.PAEGeneratedOutputs={}; self.edges=[]
-        self.readFromFile(filename); self.connect(); self.buildEdges()
-    def buildEdges(self):
+    def __init__(self, filename, numPAEinputs = 4, numPAEoutputs = 3):
+        self.numPIs = -1
+        self.numPOs = -1    
+        self.numPAEinputs = numPAEinputs    # PAEセルの入力数
+        self.numPAEoutputs = numPAEoutputs  # PAEセルの出力数
+        self.netlistPIs = {}                # ネットリストの外部入力の辞書
+        self.netlistPOs = {}                # ネットリストの外部出力の辞書
+        self.PAEInstances = {}              # 名前とPAEインスタンスの辞書
+        self.PAEGeneratedOutputs = {}       # 名前とPAEインスタンスの中間出力
+        self.edges = []                     # ネットリスト内の接続リスト
+        self.readFromFile(filename)         # ファイルからネットリストの読み込み
+        self.connect()                      # ネットリストの接続構築
+        self.buildEdges()                   # ネットリスト内の接続リスト(fanoutもついでに)を構築
+        self.writeDot()
+
+    def writeDot(self): # graphviz向けに、グラフを出力
+        with open('sample.dot', 'w') as f:
+            str = "digraph netlist {\n"
+            f.write(str)
+            for e in self.edges:
+                if type(e.src) == PAEInstanceOutput:
+                    srcname = e.src.PAEInstance.name
+                else:
+                    print(type(e.src))
+                    assert(type(e.src) == NetlistPI)
+                    srcname = e.src.name
+
+                if type(e.dst) == PAEInstanceInput:
+                    dstname = e.dst.PAEInstance.name
+                else:
+                    print(type(e.dst))
+                    assert(type(e.dst) == NetlistPO)
+                    dstname = e.dst.name
+                    
+                
+                str = "\t{}->{}\n".format(srcname, dstname)
+                f.write(str)
+            str = "}\n"
+            f.write(str)            
+        
+        
+
+    def buildEdges(self): # すでに情報はほぼ準備されている
+        # 各PAEインスタンスごとに、実行。PAEの入力に入ってくるエッジ
         for paeInst in self.PAEInstances.values():
-            for i, src in enumerate(paeInst.inputs):
-                if src is None: continue
+            for i, src in enumerate(paeInst.inputs): # 各PAEインスタンスの入力ごとに実行
+
+                # エッジ作成
+                if src is None: # PAEの入力がnot-connected (nc)。何もしない
+                    continue
                 paeInput = PAEInstanceInput(paeInst, i)
                 self.edges.append(Edge(self, src, paeInput))
-                if type(src) is PAEInstanceOutput: src.PAEInstance.fanouts[src.outputNum].append(paeInput)
-                elif type(src) is NetlistPI: src.fanouts.append(paeInput)
+
+                # ファンアウト情報追加
+                if type(src) is PAEInstanceOutput:
+                    src.PAEInstance.fanouts[src.outputNum].append(paeInput)
+                elif type(src) is NetlistPI:
+                    src.fanouts.append(paeInput)
+                        
+        # 外部出力に入ってくるエッジ
         for po in self.netlistPOs.values():
+            
+            # エッジ作成            
             self.edges.append(Edge(self, po.input, po))
-            if type(po.input) is PAEInstanceOutput: po.input.PAEInstance.fanouts[po.input.outputNum].append(po)
-            elif type(po.input) is NetlistPI: po.input.fanouts.append(po)
-    def connect(self):
-        for paeInst in self.PAEInstances.values():
-            for i, name in enumerate(paeInst.outputNames):
-                if name == "nc": paeInst.outputs.append(None)
-                else:
-                    paeOutput = PAEInstanceOutput(name, paeInst, i)
-                    if name in self.netlistPOs: self.netlistPOs[name].input = paeOutput
+
+            # ファンアウト情報追加
+            if type(po.input) is PAEInstanceOutput:
+                po.input.PAEInstance.fanouts[po.input.outputNum].append(po)
+            elif type(po.input) is NetlistPI:
+                po.input.show()
+                po.input.fanouts.append(po)
+                
+
+        for e in self.edges:
+            e.show()
+
+        for p in self.PAEInstances.values():
+            p.showFanouts()
+                
+
+        
+    def connect(self): # ネットリストの接続構築
+
+        # 各PAEインスタンスごとに、実行        
+        for paeInst in self.PAEInstances.values(): 
+            # PAE毎に、出力ごとに、オブジェクト接続・生成
+            for i, name in enumerate(paeInst.outputNames): 
+                    
+                if name == "nc": # 接続無し
+                    paeInst.outputs.append(None) # outputsにNoneをセット
+                else: # 出力は、新たにこのPAEで生成された信号
+
+                    paeOutput = PAEInstanceOutput(name, paeInst, i)                    
+
+                    if name in self.netlistPOs: # 外部出力
+                        
+                        #paeInst.outputs.append(paeOutput)
+                        #paeInst.outputs.append(self.netlistPOs[name]) # outputsにPOをセット
+                        self.netlistPOs[name].input = paeOutput
+                    
                     paeInst.outputs.append(paeOutput)
                     self.PAEGeneratedOutputs[name] = paeOutput
-        for paeInst in self.PAEInstances.values():
+                    
+        # 各PAEインスタンスごとに、実行        
+        for paeInst in self.PAEInstances.values(): 
+            # PAE毎に、入力ごとに、オブジェクト接続
             for i, name in enumerate(paeInst.inputNames):
-                if name in self.netlistPIs: paeInst.inputs.append(self.netlistPIs[name])
-                elif name == "nc": paeInst.inputs.append(None)
-                else:
+                if name in self.netlistPIs: # 外部入力
+                    paeInst.inputs.append(self.netlistPIs[name]) # inputsにPIをセット
+                elif name == "nc": # 接続無し
+                    paeInst.inputs.append(None) # outputsにNoneをセット
+                else: # 入力は、PAEで生成された信号
+
                     paeOutput = self.PAEGeneratedOutputs.get(name)
-                    paeInst.inputs.append(paeOutput)
-    def readFromFile(self, filename):
+                    #paeOutput = self.PAEGeneratedOutputs[name]
+                    if paeOutput is None:
+                        print(f"PaeOutput is None is connect for {name}")
+
+                    
+                    paeInst.inputs.append(paeOutput) # outputsに生成信号をセット
+
+                    
+        # 各PAEインスタンスごとに、実行        
+        for paeInst in self.PAEInstances.values(): 
+                
+            # デバッグ用表示
+            print("Inputs for PAE[{}]".format(paeInst.name))
+            for i, e in enumerate(paeInst.inputs):
+                if e is None:
+                    print("[{}] : None".format(i))
+                    
+                elif type(e) is NetlistPI:
+                    print("[{}] : PI[{}])".format(i, e.name))
+                
+                elif type(e) is PAEInstanceOutput:
+                    print("[{}] : PAEO[{}] gen. by {}[{}]".format(i, e.name, e.PAEInstance.name, e.outputNum))
+
+            print("Outputs for PAE[{}]".format(paeInst.name))
+            for i, o in enumerate(paeInst.outputs):
+                if o is None:
+                    print("[{}] : None".format(i))
+                    
+                elif type(o) is NetlistPO:
+                    print("[{}] : PO[{}]".format(i, o.name))
+                
+                elif type(o) is PAEInstanceOutput:
+                    print("[{}] : PAEO[{}]".format(i, o.name))
+            print("\n")
+            
+    def readFromFile(self, filename): # ファイルからネットリストの読み込み
         with open(filename) as f:
             for line in f:
-                l = line.split(); del_index = -1
-                for i, e in enumerate(l):
-                    if '#' in e: del_index = i; break
-                if del_index != -1: del l[del_index:]
-                if len(l) == 0: continue
-                if l[0] == "inputs":
-                    self.numPIs = 0
-                    for e in l[1:]: self.netlistPIs[e] = NetlistPI(self,e); self.numPIs+=1
-                elif l[0] == "outputs":
-                    self.numPOs = 0
-                    for e in l[1:]: self.netlistPOs[e] = NetlistPO(self,e); self.numPOs+=1
-                elif l[0] == "pae":
-                    pae = PAEInstance(self,l[1]); self.PAEInstances[l[1]] = pae
-                    pae.inputNames.extend(l[2:2+self.numPAEinputs])
-                    pae.outputNames.extend(l[2+self.numPAEinputs:])
+                l = line.split()
+                for i, e in enumerate(l): # コメント削除
+                    if '#' in e:
+                        del l[i:]
+                        break
+                if len(l) == 0:
+                    continue
 
-# (SAT クラス群の定義)
-class Literal:
+                if l[0] == "inputs":
+                        numPIs = 0
+                        for e in l[1:]:
+                            self.netlistPIs[e] = NetlistPI(self,e)
+                            numPIs += 1
+                        self.numPIs = numPIs
+
+                elif l[0] == "outputs":
+                    numPOs = 0
+                    for e in l[1:]:
+                        self.netlistPOs[e] = NetlistPO(self,e)
+                        numPOs += 1
+                    self.numPOs = numPOs
+                elif l[0] == "pae":
+                    pae = PAEInstance(self,l[1])
+                    print("pae{}".format(pae))
+                    self.PAEInstances[l[1]] = pae
+                    for e in l[2:6]:
+                        pae.inputNames.append(e)
+                    for e in l[6:]:
+                        pae.outputNames.append(e)
+                elif l[0] == "wire":
+                    wire = Wire(self,l[1],l[2])
+                elif l[0] == "PAEinputs":
+                    self.numPAEinputs = l[1]
+                elif l[0] == "PAEOutputs":
+                    self.numPAEoutputs = l[1]
+
+            #print("netlistPIs:{}".format(self.netlistPIs))
+            #print("netlistPOs:{}".format(self.netlistPOs))            
+            #print("PAEInstances:{}".format(self.PAEInstances))
+            #print("numPAEinputs:{}".format(self.numPAEinputs))
+            #print("numPAEoutputs:{}\n".format(self.numPAEoutputs))
+
+
+# ------------------------------------------------------------------
+# SAT式作成関係のクラス
+# ------------------------------------------------------------------
+
+class Literal: # リテラル。SAT変数の肯定形、または、否定形
     count = 0
-    def __init__(self, var, polarity=True): self.count=Literal.count; Literal.count+=1; self.var=var; self.polarity=polarity; self.str=self.str(); self.cnfStr=self.cnfStr()
-    def str(self): return self.var.name if self.polarity else "!" + self.var.name
-    def cnfStr(self): return self.var.cnfStr() if self.polarity else "-" + self.var.cnfStr()
+    def __init__(self, var, polarity=True):
+        self.count = Literal.count  # リテラルのID番号
+        Literal.count += 1
+        self.var = var              # 対応する変数
+        self.polarity = polarity    # 極性(True:肯定形, False:否定形)
+        self.str = self.str()       # 変数名を使用したリテラル文字列
+        self.cnfStr = self.cnfStr() # 変数のID番号を使用したリテラル文字列
+        
+    def str(self):
+        if self.polarity is True:
+            return self.var.name
+        else:
+            return "!" + self.var.name            
+
+    def cnfStr(self):
+        if self.polarity is True:
+            return self.var.cnfStr()
+        else:
+            return "-" + self.var.cnfStr()
+
+# SAT Clauseを表す。Clauseの集合が制約。制約の集合がSAT問題
+# Clause はリテラルの集合
 class Clause:
-    count = 0
-    def __init__(self): self.count=Clause.count; Clause.count+=1; self.literals=[]
+    count = 0    
+    def __init__(self):
+        self.count = Clause.count  # リテラルのID番号
+        Clause.count += 1        
+        self.literals = []
+
     @classmethod
-    def numClauses(cls): return cls.count
-    def addLiteral(self, literal): self.literals.append(literal)
-    def str(self): return " + ".join([l.str for l in self.literals])
-    def cnfStr(self): return " ".join([l.cnfStr for l in self.literals]) + " 0"
-class Constraint:
-    def __init__(self): self.clauses=[]
-    def addClause(self, clause): self.clauses.append(clause)
-    def Str(self): return "".join(["("+cl.str()+")" for cl in self.clauses])
-    def cnfStr(self): return "\n".join([cl.cnfStr() for cl in self.clauses]) + "\n"
+    def numClauses(cls):
+        return cls.count
+
+    def addLiteral(self, literal):
+        self.literals.append(literal)
+
+    def str(self):
+        str = ""
+        for i, literal in enumerate(self.literals):
+            str += literal.str
+            if i < len(self.literals)-1:
+                str += " + "
+        return str
+
+    def cnfStr(self):
+        str = ""
+        for i, literal in enumerate(self.literals):
+            str += literal.cnfStr + " "
+        str += "0"
+        return str
+
+
+class Constraint: # SATの各制約を表す
+    # 関係する情報を蓄える
+    # SAT制約(CNF)で出力する機能
+    # clause の集合
+    def __init__(self):
+        self.clauses = []
+        
+    def addClause(self, clause):
+        self.clauses.append(clause)
+
+    def printStr(self):
+        str = ""
+        for cl in self.clauses:
+            print("("+cl.str()+")")
+        print("")
+        
+    def Str(self):
+        str = ""
+        for cl in self.clauses:
+            str += "("+cl.str()+")"
+        return str
+
+    def printCnfStr(self):
+        str = ""
+        for cl in self.clauses:
+            print(cl.cnfStr())
+
+    def cnfStr(self):
+        str = ""
+        for cl in self.clauses:
+            str += cl.cnfStr() + "\n"
+        return str
+
+            
+# BindConnect制約作成時に使用
+# srcが、netlistPI, netlistPOであれば、それをそのまま返す
+# srcがPAEインスタンスの入力や出力であれば、対応するPAEインスタンスを返す
 def PAEInstanceOrPIPO(src):
-    if type(src) is NetlistPI or type(src) is NetlistPO: return src
-    elif type(src) is PAEInstanceInput or type(src) is PAEInstanceOutput: return src.PAEInstance
-    else: assert("Invalid input argumet at PAEInstanceOrPIPO()")
+    if type(src) is NetlistPI or type(src) is NetlistPO:
+        return src
+    elif type(src) is PAEInstanceInput or type(src) is PAEInstanceOutput:
+        return src.PAEInstance
+    else:
+        assert("Invalid input argumet at PAEInstanceOrPIPO()")
+        
+
+# BindConnect制約作成時に使用
+# srcがPAEインスタンスの出力/netlistPIであった場合、PAEセル/PIの"binding"(引数)に
+# バインドされるときの、対応するPAEセルの出力ポート/PIを返す。
+# 同様に、srcがPAEインスタンスの入力/netlistPOであった場合、
+# PAEセル/POのbindingにバインドされるときの、対応するPAEセル/POの入力ポートを返す。
+# (PAEセルの入力ポートは直接対応するクラスがないので、IMUXにしたが、大丈夫か？。。)
+# binding: srcがバインドされるPAEセル/PI/PO
 def bindingPort(src, binding):
-    if type(src) is PAEInstanceOutput: return binding.outputs[src.outputNum]
-    elif type(src) is PAEInstanceInput: return binding.IMUXes[src.inputNum]
-    elif type(src) is NetlistPI or type(src) is NetlistPO: return binding
-    else: assert("Invalid input argumet at bindingPort()")
-class SATmgr:
+    if type(src) is PAEInstanceOutput:
+        outputNum = src.outputNum
+        return binding.outputs[outputNum]
+    elif type(src) is PAEInstanceInput:
+        inputNum = src.inputNum        
+        return binding.IMUXes[inputNum]
+    elif type(src) is NetlistPI or type(src) is NetlistPO: 
+        return binding
+    else:
+        assert("Invalid input argumet at bindingPort()")
+    
+
+class SATmgr: # SAT関係の情報を蓄えるクラス
     def __init__(self, PEALogic, Netlist):
-        self.PEALogic = PEALogic; self.Netlist = Netlist; self.vars = {}; self.BindVars = {}; self.ConnectVars = {}; self.OMUXUseVars = {}; self.WireVars = {}
-        self.makeBindVars(); self.makeConnectVars()
-        self.MappingConstraints = []; self.buildMappingConstraints()
-        self.MaxMappingConstraints = []; self.buildMaxMappingConstraints()
-        self.OMUXUsageConstraints = []; self.buildOMUXUsageConstraints()
-        self.OMUXUsageVarConstraints = []; self.buildOMUXUsageVarConstraints()
-        self.IMUXUsageConstraints = []; self.buildIMUXUsageConstraints()
-        self.WireVarConstraints = []; self.buildWireVarConstraints()
-        self.BindConnectConstraints = []; self.buildBindConnectConstraints()
-        self.writeCNF(); self.writeReadableCNF()
+        self.PEALogic = PEALogic
+        self.Netlist = Netlist
+        self.vars = {}        # 変数の辞書(key: ID番号, val: 変数へのポインタ)
+        self.BindVars = {}    # 辞書(PAEインスタンス、セルで引く)
+        self.ConnectVars = {} # 辞書(src, omux, dstで引く)
+        self.OMUXUseVars = {} # 辞書(src, omuxで引く)
+        self.WireVars = {}    # 辞書(src, dstで引く)
+        self.makeBindVars()
+        self.makeConnectVars()
+        self.MappingConstraints = []      # Mapping制約の集合
+        self.buildMappingConstraints()
+        self.MaxMappingConstraints = []   # MaxMapping制約の集合
+        self.buildMaxMappingConstraints()
+        self.OMUXUsageConstraints = []     # OMUXUsage制約の集合
+        self.buildOMUXUsageConstraints()
+        self.OMUXUsageVarConstraints = []  # OMUXUsageVar制約の集合
+        self.buildOMUXUsageVarConstraints()
+        self.IMUXUsageConstraints = []     # IMUXUsage制約の集合
+        self.buildIMUXUsageConstraints()
+        self.WireVarConstraints = []      # WireVar制約の集合
+        self.buildWireVarConstraints()        
+        self.BindConnectConstraints = []  # BindConnect制約の集合
+        self.buildBindConnectConstraints()
+        self.writeCNF()                   # SATのCNFをファイルに出力
+        self.writeReadableCNF()           # SATのCNFをデバッグ用に出力
+        self.solveSAT()                   # 出力したCNFをSATソルバーで解く
+        self.readSATResult()              # SATソルバーの結果を読み込み
+
+
+    # SATの結果を読み込んで、配置配線結果に翻訳する機能
+    def readSATResult(self):
+        #for k, v in self.vars.items():
+        #    print("var_id={}, var_name={}".format(k, v.name))
+
+        trueVars = []
+
+        with open('sample.output', 'r') as f:
+            satOutput = f.read()
+            #print(satOutput)
+            tokens = satOutput.split()
+            if tokens[0] == "SAT": # SAT
+                for t in tokens[1:]:
+                    if t.startswith('-'):   # 変数=0
+                        #print("t[1:]= {}".format(t[1:]))
+                        var = self.vars.get(int(t[1:]))
+                        #print("1. satVar: !{}".format(var.name))
+
+                    else: # 変数=1 これだけ、trueVarsに格納する
+                        #print(f"t={t}, int(t)={int(t)}")
+                        if t=="0": # 最後の終端文字　(意味無し)
+                            continue
+                        var = self.vars.get(int(t))
+                        trueVars.append(var)
+                        #print("2. satVar: {}".format(var.name))                        
+
+            else:                  # UNSAT
+                print("########### SAT could not find solution")
+                pass
+
+        print("1を割り当てられた決定変数は以下です")
+        for i, v in enumerate(trueVars):
+            print("i={}: ".format(i), end="")
+            print(v.name)
+
+        return trueVars # Graphviz接続で参照したい
+
+
+
+    # SATの結果を読み込んで、配置配線結果に翻訳する機能
+
     def readSATResultKissat(self):
-        print("using Kissat"); trueVars = []; isSAT = False
-        try:
-            with open('sample.output', 'r') as f: lines = f.readlines()
-            for line in lines:
-                tokens = line.split()
-                if not tokens: continue
-                if tokens[0] == "s":
-                    if tokens[1] == "SATISFIABLE": isSAT = True
-                    else: break
-                if tokens[0] == "v":
-                    for t in tokens[1:]:
-                        if t == "0": break
-                        if not t.startswith('-'):
-                            var = self.vars.get(int(t))
-                            if var: trueVars.append(var)
-            if not isSAT: print("########### SAT could not find solution")
-        except FileNotFoundError: print("Error: sample.output not found.")
-        except Exception as e: print(f"Error reading SAT result: {e}")
-        return trueVars
+        #for k, v in self.vars.items():
+        #    print("var_id={}, var_name={}".format(k, v.name))
+
+        print("using Kissat")
+
+        trueVars = []
+
+        isSAT = False
+        
+        with open('sample.output', 'r') as f:
+            lines = f.readlines()
+
+        index = 0
+        finish = False
+
+        while index < len(lines):
+            line = lines[index]
+            tokens = line.split()
+
+            print("tokens:")
+            print(tokens)
+
+            if tokens[0] == "c": # comment
+                index += 1
+                continue
+
+            if tokens[0] == "s": # result
+                if tokens[1] == "SATISFIABLE": # SAT
+                    isSAT = True
+                    index += 1
+                    continue
+                else:                  # UNSAT
+                    print("########### SAT could not find solution")
+                    break
+
+            if tokens[0] == "v": # variable assignment
+
+                for t in tokens[1:]:
+
+                    print(f"token: {t}")
+                    
+                    if t.startswith('-'):   # 変数=0
+                        #print("t[1:]= {}".format(t[1:]))
+                        var = self.vars.get(int(t[1:])) # var使われないので、何もしていない(削除する)
+                        #print("1. satVar: !{}".format(var.name))
+
+                    else: # 変数=1 これだけ、trueVarsに格納する
+                        #print(f"t={t}, int(t)={int(t)}")
+                        #print(f"numVars = {Var.numVars()}")
+                        if t=="0": # 最後の終端文字　(意味無し)
+                            #print("Finish")
+                            finish = True
+                            break
+                        #print(f"getting var for var id = {int(t)}")
+                        var = self.vars.get(int(t))
+                        #print("var:")
+                        #var.cnfStr()
+                        trueVars.append(var)
+                        #print("2. satVar: {}".format(var.name))                        
+            if finish == True:
+                break
+
+            index += 1
+
+        print("1を割り当てられた決定変数は以下です")
+        for i, v in enumerate(trueVars):
+            print("i={}: ".format(i), end="")
+            print(v.name)
+
+        return trueVars # Graphviz接続で参照したい
+
+    
+
+    # SATソルバーを実行
     def solveSAT(self):
-        command = ['kissat', '--time=3', '--no-binary', 'sample.cnf']
-        try:
-            with open('sample.output', 'w') as output_file, open('sample.cnf', 'r') as input_file:
-                subprocess.run(command, stdin=input_file, stdout=output_file, shell=False, timeout=5) # 5秒タイムアウト
-        except subprocess.TimeoutExpired:
-            print("SAT solver timed out.")
-        except FileNotFoundError:
-            print("Error: 'kissat' solver not found. Make sure it is installed and in your PATH.")
-        except Exception as e:
-            print(f"Error running SAT solver: {e}")
+
+        #command = ['minisat', '-cpu-lim=10', 'sample.cnf', 'sample.output']
+        #command = ['cadical', 'sample.cnf', 'sample.output']
+        # for minisat
+        #res = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)        
+
+        command = ['kissat', '--time=3', '--no-binary', 'sample.cnf']        
+        # for kissat
+        with open('sample.output', 'w') as output_file:
+            with open('sample.cnf', 'r') as input_file:
+                res = subprocess.run(command, stdin=input_file, stdout=output_file, shell=False)
+                #res = subprocess.run(command, stdin=input_file, stdout=output_file, shell=True)                
+
+
+    # 全体のSAT式をファイルに出力する機能
     def writeCNF(self):
         with open('sample.cnf', 'w') as f:
-            f.write(f"p cnf {Var.numVars()} {Clause.numClauses()}\n")
-            f.write(self.MappingConstraints.cnfStr())
-            f.write(self.MaxMappingConstraints.cnfStr())
-            f.write(self.OMUXUsageConstraints.cnfStr())
-            f.write(self.OMUXUsageVarConstraints.cnfStr())
-            f.write(self.IMUXUsageConstraints.cnfStr())
-            f.write(self.WireVarConstraints.cnfStr())
-            f.write(self.BindConnectConstraints.cnfStr())
+            str = "p cnf {} {}\n".format(Var.numVars(), Clause.numClauses())
+            f.write(str)
+
+            for c in self.MappingConstraints:
+                str = c.cnfStr()
+                f.write(str)
+            for c in self.MaxMappingConstraints:
+                str = c.cnfStr()
+                f.write(str)                
+            for c in self.OMUXUsageConstraints:
+                str = c.cnfStr()
+                f.write(str)                                
+            for c in self.OMUXUsageVarConstraints:
+                str = c.cnfStr()
+                f.write(str)
+            for c in self.IMUXUsageConstraints:
+                str = c.cnfStr()
+                f.write(str)
+            for c in self.WireVarConstraints:
+                str = c.cnfStr()
+                f.write(str)
+            for c in self.BindConnectConstraints:
+                str = c.cnfStr()
+                f.write(str)
+
+    # 全体のSAT式をデバッグ用にファイル出力する機能 (人間が読めるように、変数名を使用)
     def writeReadableCNF(self):
         with open('sample.rcnf', 'w') as f:
-            f.write("MappingConstraints\n" + self.MappingConstraints.Str() + "\n")
-            f.write("\nMaxMappingConstraints\n" + self.MaxMappingConstraints.Str() + "\n")
-            f.write("\nOMUXUsageConstraints\n" + self.OMUXUsageConstraints.Str() + "\n")
-            f.write("\nOMUXUsageVarConstraints\n" + self.OMUXUsageVarConstraints.Str() + "\n")
-            f.write("\nIMUXUsageConstraints\n" + self.IMUXUsageConstraints.Str() + "\n")
-            f.write("\nWireVarConstraints\n" + self.WireVarConstraints.Str() + "\n")
-            f.write("\nBindConnectConstraints\n" + self.BindConnectConstraints.Str() + "\n")
+            f.write("MappingConstraints\n")
+            for c in self.MappingConstraints:
+                str = c.Str()+"\n"
+                f.write(str)
+            f.write("\nMaxMappingConstraints\n")                
+            for c in self.MaxMappingConstraints:
+                str = c.Str()+"\n"
+                f.write(str)
+            f.write("\nOMUXUsageConstraints\n")                
+            for c in self.OMUXUsageConstraints:
+                str = c.Str()+"\n"
+                f.write(str)
+            f.write("\nOMUXUsageVarConstraints\n")
+            for c in self.OMUXUsageVarConstraints:
+                str = c.Str()+"\n"
+                f.write(str)
+            f.write("\nIMUXUsageConstraints\n")
+            for c in self.IMUXUsageConstraints:
+                str = c.Str()+"\n"
+                f.write(str)
+            f.write("\nWireVarConstraints\n")
+            for c in self.WireVarConstraints:
+                str = c.Str()+"\n"
+                f.write(str)
+            f.write("\nBindConnectConstraints\n")
+            for c in self.BindConnectConstraints:
+                str = c.Str()+"\n"
+                f.write(str)
+
+        
+    # BindConnect制約を作る
     def buildBindConnectConstraints(self):
+
+        #return # コメントアウト　2024/12/23 配線評価のため        
         for e in self.Netlist.edges:
-            src, dst = e.src, e.dst
-            srcInst, dstInst = PAEInstanceOrPIPO(src), PAEInstanceOrPIPO(dst)
-            srcBindings = []; srcBindingPorts = []
+            src = e.src
+            dst = e.dst
+
+            srcInst = PAEInstanceOrPIPO(src)
+            dstInst = PAEInstanceOrPIPO(dst)
+
+            #print("--- src of edge")
+            #src.show()
+            #print("")
+            #srcInst.show()
+            #print(srcInst.name)
+
+            #print("--- dst of edge")
+            #dst.show()
+            #print("")            
+            #dstInst.show()
+            #print("")            
+            #print(dstInst.name)
+            #print("")
+
+            #srcInst, dstInstのバインド候補を列挙できるはず。
+            #bind変数のキーをチェックする。
+            #srcInst, dstInstを第一のキーとして、bind変数の辞書をチェックし、
+            #第二のキーが、バインド結果の候補となる。
+            #Bind変数を作るときのように、PAECells, PIs, POsを列挙する。
+            
+            #srcInstのバインド候補の列挙
+            #print("srcBindings & BindingPorts")
+            srcBindings = [] # srcInstのバインド候補のPAECell, PI/PO
+            srcBindingPorts = [] # バインド候補のPAECellのポート, PI/PO
             for k, v in self.BindVars.items():
-                if k[0] == srcInst: srcBindings.append(k[1]); srcBindingPorts.append(bindingPort(src, k[1]))
-            dstBindings = []; dstBindingPorts = []
+                if k[0] == srcInst:
+                    srcBindings.append(k[1])
+                    srcBindingPort = bindingPort(src, k[1])
+                    srcBindingPorts.append(srcBindingPort)
+                    #k[1].show()
+                    #srcBindingPort.show()
+
+            #print("dstBindings & BindingPorts")                    
+            #srcInstのバインド候補の列挙
+            dstBindings = [] # dstInstのバインド候補のPAECell, PI/PO
+            dstBindingPorts = [] # バインド候補のPAECellのポート, PI/PO
             for k, v in self.BindVars.items():
-                if k[0] == dstInst: dstBindings.append(k[1]); dstBindingPorts.append(bindingPort(dst, k[1]))
+                if k[0] == dstInst:
+                    dstBindings.append(k[1])
+                    dstBindingPort = bindingPort(dst, k[1])
+                    dstBindingPorts.append(dstBindingPort)
+                    #dstBindingPort.show()
+
             for j1, srcBinding in enumerate(srcBindings):
                 for j2, dstBinding in enumerate(dstBindings):
-                    srcBindingPort, dstBindingPort = srcBindingPorts[j1], dstBindingPorts[j2]
-                    bindConnectConstraint = Constraint()
+
+                    #print("in j1&j2 loop")
+
+                    srcBindingPort = srcBindingPorts[j1]
+                    dstBindingPort = dstBindingPorts[j2]
+
+                    bindConnectConstraint = Constraint()                    
+
                     wv = self.WireVars.get((srcBindingPort, dstBindingPort))
+                    if wv is None:
+                        #print("Following WireVars not found:")
+                        #print("from ", end="")
+                        #srcBindingPort.show()
+                        #print("to ", end="")
+                        #dstBindingPort.show()
+                        
+                        # srcからdstに接続する配線が存在しないことを意味する。
+                        # このような状況で、srcInstをsrcBindingに、かつ、同時に
+                        # dstInstをdstBindingにバインド(配置)することはできない。
+                        # これを条件に表現する。
+                        # つまり、バインド変数を0に設定する必要がある。
+
+                        sbv = self.BindVars.get((srcInst, srcBinding))
+                        #print(f"src: Illegal binding vars, {sbv.name}")
+
+                        dbv = self.BindVars.get((dstInst, dstBinding))
+                        #print(f"dst: Illegal binding vars, {dbv.name}")
+
+                        cl = Clause()
+                        l = Literal(sbv, False)
+                        cl.addLiteral(l)
+                        l = Literal(dbv, False)
+                        cl.addLiteral(l)
+                        bindConnectConstraint.addClause(cl)
+                        #print("bindConnectConstraint")
+                        #bindConnectConstraint.printStr()
+                        
+                        self.BindConnectConstraints.append(bindConnectConstraint)
+                        continue
+
                     cl = Clause()
-                    sbv = self.BindVars.get((srcInst, srcBinding)); cl.addLiteral(Literal(sbv, False))
-                    dbv = self.BindVars.get((dstInst, dstBinding)); cl.addLiteral(Literal(dbv, False))
-                    if wv is None: # 接続がない場合
-                        pass # 制約 (!sbv + !dbv) を追加
-                    else: # 接続がある場合
-                        cl.addLiteral(Literal(wv, True)) # 制約 (!sbv + !dbv + wv) を追加
+
+                    bv = self.BindVars.get((srcInst, srcBinding))
+                    l = Literal(bv, False)
+                    cl.addLiteral(l)
+                    bv = self.BindVars.get((dstInst, dstBinding))
+                    l = Literal(bv, False)
+                    cl.addLiteral(l)
+                        
+                    l = Literal(wv, True)
+                    cl.addLiteral(l)
+
                     bindConnectConstraint.addClause(cl)
                     self.BindConnectConstraints.append(bindConnectConstraint)
+                        
+
+    # WireVar制約を作る
     def buildWireVarConstraints(self):
+        # Wire変数ごとに、制約を作る
+        # src, dstが共通のConnectVarを選び出す
         for wk, wv in self.WireVars.items():
-            connectvars = [cv for ck, cv in self.ConnectVars.items() if wk[0] == ck[0] and wk[1] == ck[2]]
+            connectvars = []
+            for ck, cv in self.ConnectVars.items():
+                if wk[0] == ck[0] and wk[1] == ck[2]:
+                    connectvars.append(cv)
+
+            # Wire変数に関してw、制約を作る
             wireVarConstraint = Constraint()
-            cl = Clause(); cl.addLiteral(Literal(wv, False))
-            for cv in connectvars: cl.addLiteral(Literal(cv, True))
+            cl = Clause()
+            l = Literal(wv, False)
+            cl.addLiteral(l)
+            for cv in connectvars:
+                l = Literal(cv, True)
+                cl.addLiteral(l)
             wireVarConstraint.addClause(cl)
             self.WireVarConstraints.append(wireVarConstraint)
+
+        
+    # OMUXUsageVar制約を作る
     def buildOMUXUsageVarConstraints(self):
+
+        return # コメントアウト　2024/12/23
+        
+        # OMUX m, PAEOutput sごとに、制約を作る
+
         OMUXes = self.PEALogic.OMUXes + self.PEALogic.skipOMUXes
-        for OMUX in OMUXes:
+        print("len(OMUXes)={}".format(len(self.PEALogic.OMUXes)))
+        print("len(skipOMUXes)={}".format(len(self.PEALogic.skipOMUXes)))
+        
+        print("resulting OMUXes begin")
+        for m in OMUXes:
+            m.show()
+            print("\n")
+        print("resulting OMUXes end")
+        
+        #for OMUX in self.PEALogic.OMUXes:
+        for OMUX in OMUXes:            
             for PAEOutput in self.PEALogic.PAEOutputs:
+                
+                # OMUX m, PAEOutput sに関するOMUXUse変数を取り出す
                 omuxusevar = self.OMUXUseVars.get((PAEOutput,OMUX))
-                if omuxusevar is None: continue
-                connectvars = [v for k, v in self.ConnectVars.items() if k[0] == PAEOutput and k[1] == OMUX]
+                if omuxusevar is None:
+                    continue
+
+                # OMUX m, PAEOutput sに関するConnect変数を取り出す
+                connectvars = []
+                for k, v in self.ConnectVars.items():
+                    if k[0] != PAEOutput:
+                        continue
+                    if k[1] != OMUX:
+                        continue
+                    connectvars.append(v)
+            
+                # OMUX m, PAEOutput sに関して、OMUXUsageVar制約を作る
                 OMUXUsageVarConstraint = Constraint()
                 for u in connectvars:
-                    cl = Clause(); cl.addLiteral(Literal(u, False)); cl.addLiteral(Literal(omuxusevar, True))
+                    cl = Clause()
+                    l = Literal(u, False)
+                    cl.addLiteral(l)                
+                    l = Literal(omuxusevar, True)
+                    cl.addLiteral(l)
                     OMUXUsageVarConstraint.addClause(cl)
                 self.OMUXUsageVarConstraints.append(OMUXUsageVarConstraint)
+
+
+
+    # Mapping制約を作る
     def buildMappingConstraints(self):
-        instances = list(self.Netlist.PAEInstances.values()) + list(self.Netlist.netlistPIs.values()) + list(self.Netlist.netlistPOs.values())
+
+        # PAEインスタンス、netlistPI, netlistPOごとに、制約を作る
+        # まずそれらすべてを含んだリストを作る
+        
+        instances = []
+        for PAEInstance in self.Netlist.PAEInstances.values():
+            instances.append(PAEInstance)
+        for netlistPI in self.Netlist.netlistPIs.values():
+            instances.append(netlistPI)
+        for netlistPO in self.Netlist.netlistPOs.values():
+            instances.append(netlistPO)
+            
+        #for PAEInstance in self.Netlist.PAEInstances.values():        
         for instance in instances:
-            bindvars = [v for k, v in self.BindVars.items() if k[0] == instance]
-            if not bindvars: continue
-            mappingConstraint = Constraint(); cl = Clause()
-            for v in bindvars: cl.addLiteral(Literal(v, True))
-            mappingConstraint.addClause(cl); self.MappingConstraints.append(mappingConstraint)
+            # Bind変数から、PAEInstance iに関するものだけ取り出す
+            bindvars = []
+            for k, v in self.BindVars.items():
+                #if k[0] != PAEInstance:
+                if k[0] != instance:
+                    continue
+                bindvars.append(v)
+                #print("=== In MappingConstraints, print bindvar")
+                #print(v.name)
+                
+            # PAEInstance iに関して、Mapping制約を作る
+            mappingConstraint = Constraint()
+            cl = Clause()            
+            for v in bindvars:
+                l = Literal(v, True)
+                cl.addLiteral(l)
+            mappingConstraint.addClause(cl)
+            self.MappingConstraints.append(mappingConstraint)
+            
+
+    # MaxMapping制約を作る
     def buildMaxMappingConstraints(self):
-        cells = self.PEALogic.PAECells + self.PEALogic.PIs + self.PEALogic.POs
+
+        # PAEセル、PIセル, POセルごとに、制約を作る
+        # まずそれらすべてを含んだリストを作る
+        
+        cells = []
+        for PAECell in self.PEALogic.PAECells:
+            cells.append(PAECell)
+        for PI in self.PEALogic.PIs:
+            cells.append(PI)
+        for PO in self.PEALogic.POs:
+            cells.append(PO)
+        
+        #for PAECell in self.PEALogic.PAECells:
         for cell in cells:
-            bindvars = [v for k, v in self.BindVars.items() if k[1] == cell]
+            cell.show()
+            # Bind変数から、Cell jに関するものだけ取り出す
+            bindvars = []
+            for k, v in self.BindVars.items():
+                #if k[1] != PAECell:
+                if k[1] != cell:
+                    continue
+                bindvars.append(v)
+                #print("!!!=== In MaxMappingConstraints, print bindvar")
+                #print(v.name)
+                
+            # Cell jに関して、MaxMapping制約を作る
             pairs = list(itertools.combinations(bindvars, 2))
-            if not pairs: continue
-            maxMappingConstraint = Constraint()
+            if len(pairs) == 0:
+                continue
+
+            #for p in pairs:
+            #    print("======= PAIR")
+            #    print(p[0].name)
+            #    print(p[1].name)
+                
+            maxMappingConstraint = Constraint()            
+
             for p in pairs:
-                u, v = p[0], p[1]
-                if u == v: continue
-                cl = Clause(); cl.addLiteral(Literal(u, False)); cl.addLiteral(Literal(v, False))
+                u = p[0]
+                v = p[1]
+                
+                if u == v: # 同じbind変数はスキップ
+                    continue
+                
+                cl = Clause()
+                l = Literal(u, False)
+                cl.addLiteral(l)
+                l = Literal(v, False)
+                cl.addLiteral(l)
+
                 maxMappingConstraint.addClause(cl)
+                #print("=== In MaxMappingConstraints, print clause")
+                #print(cl.str())
+                
             self.MaxMappingConstraints.append(maxMappingConstraint)
+
+
+    # OMUXUsage制約を作る
     def buildOMUXUsageConstraints(self):
-        OMUXes = self.PEALogic.OMUXes + self.PEALogic.skipOMUXes
+
+        return # コメントアウト　2024/12/23 配線評価のため
+    
+        # OMUXごとに、制約を作る
+
+        OMUXes = self.PEALogic.OMUXes + self.PEALogic.skipOMUXes        
+        #for OMUX in self.PEALogic.OMUXes:
         for OMUX in OMUXes:
-            omuxusevars = [v for k, v in self.OMUXUseVars.items() if k[1] == OMUX]
-            pairs = list(itertools.combinations(omuxusevars, 2))
-            if not pairs: continue
+            # OMUXUse変数から、OMUX mに関するものだけ取り出す
+            omuxusevars = []
+            for k, v in self.OMUXUseVars.items():
+                if k[1] != OMUX:
+                    continue
+                omuxusevars.append(v)
+                
+            # OMUX mに関して、MUXUsage制約を作る
             OMUXUsageConstraint = Constraint()
+
+            pairs = list(itertools.combinations(omuxusevars, 2))
+
+            #print("len={}".format(len(pairs)))
+            #for p in pairs:
+            #    print("======= PAIR2")
+            #    print(p[0].name)
+            #    print(p[1].name)
+
+            #for u in omuxusevars:
+                #for v in omuxusevars:
+
             for p in pairs:
-                u, v = p[0], p[1]
-                if u == v: continue
-                cl = Clause(); cl.addLiteral(Literal(u, False)); cl.addLiteral(Literal(v, False))
+                u = p[0]
+                v = p[1]
+
+                if u == v:
+                    continue
+                
+                cl = Clause()
+                l = Literal(u, False)
+                cl.addLiteral(l)                    
+                l = Literal(v, False)
+                cl.addLiteral(l)
                 OMUXUsageConstraint.addClause(cl)
+                #print("=== In OMUXUsageConstraints, print clause")
+                #print(cl.str())
+
             self.OMUXUsageConstraints.append(OMUXUsageConstraint)
+
+
+    # IMUXUsage制約を作る            
     def buildIMUXUsageConstraints(self):
+        
+        #return # コメントアウト　2024/12/23 配線評価のため
+        
+        # IMUXごとに、制約を作る
         for IMUX in self.PEALogic.IMUXes:
-            imuxusevars = [v for k, v in self.ConnectVars.items() if k[2] == IMUX]
-            pairs = list(itertools.combinations(imuxusevars, 2))
-            if not pairs: continue
+            # Connect変数から、IMUX dに関するものだけ取り出す
+            imuxusevars = []
+            for k, v in self.ConnectVars.items():
+                if k[2] != IMUX:
+                    continue
+                imuxusevars.append(v)
+                
+            # IMUX dに関して、IMUXUsage制約を作る
             IMUXUsageConstraint = Constraint()
+            pairs = list(itertools.combinations(imuxusevars, 2))
+
+            #print("len={}".format(len(pairs)))
+            #for p in pairs:
+            #    print("======= PAIR3")
+            #    print(p[0].name)
+            #    print(p[1].name)
+
             for p in pairs:
-                u, v = p[0], p[1]
-                if u == v: continue
-                cl = Clause(); cl.addLiteral(Literal(u, False)); cl.addLiteral(Literal(v, False))
+                u = p[0]
+                v = p[1]
+
+                if u == v:
+                    continue
+                
+                cl = Clause()
+                l = Literal(u, False)
+                cl.addLiteral(l)                    
+                l = Literal(v, False)
+                cl.addLiteral(l)
                 IMUXUsageConstraint.addClause(cl)
+                #print("=== In IMUXUsageConstraints, print clause")
+                #print(cl.str())
+
             self.IMUXUsageConstraints.append(IMUXUsageConstraint)
+
+            
+    # Bind変数を準備する
     def makeBindVars(self):
+        # PAEインスタンスをPAEセルにバインドする場合
         for PAEInstance in self.Netlist.PAEInstances.values():
             for PAECell in self.PEALogic.PAECells:
-                bindvar = BindVar(self, PAEInstance, PAECell); self.BindVars[(PAEInstance, PAECell)] = bindvar
+                bindvar = BindVar(self, PAEInstance, PAECell)
+                #print(bindvar.name)
+                bind = (PAEInstance, PAECell)
+                self.BindVars[bind] = bindvar
+  #              print("Bind var (PEAinstance)")
+  #              print(bindvar.name)                
+        # netlistPIをPEA LogicのPIにバインドする場合
         for netlistPI in self.Netlist.netlistPIs.values():
             for PI in self.PEALogic.PIs:
-                bindvar = BindVar(self, netlistPI, PI); self.BindVars[(netlistPI, PI)] = bindvar
+                bindvar = BindVar(self, netlistPI, PI)
+                bind = (netlistPI, PI)
+                self.BindVars[bind] = bindvar
+  #              print("Bind var (PI)")
+  #              print(bindvar.name)
+        # netlistPOをPEA LogicのPOにバインドする場合
         for netlistPO in self.Netlist.netlistPOs.values():
             for PO in self.PEALogic.POs:
-                bindvar = BindVar(self, netlistPO, PO); self.BindVars[(netlistPO, PO)] = bindvar
+                bindvar = BindVar(self, netlistPO, PO)
+                bind = (netlistPO, PO)
+                self.BindVars[bind] = bindvar
+  #              print("Bind var (PO)")
+  #              print(bindvar.name)
+
+
+    # Connect変数, OMUXUseVar変数, Wire変数を準備する
     def makeConnectVars(self):
         for ic in self.PEALogic.Interconnects:
-            connectvar = ConnectVar(self, ic.src, ic.omux, ic.dst); self.ConnectVars[(ic.src, ic.omux, ic.dst)] = connectvar
-            wirevar = WireVar(self, ic.src, ic.dst); self.WireVars[(ic.src, ic.dst)] = wirevar
-            if ic.omux == None: continue
+            # connect vars
+            connectvar = ConnectVar(self, ic.src, ic.omux, ic.dst)
+ #           print(connectvar.name)
+            connect = (ic.src, ic.omux, ic.dst)
+            self.ConnectVars[connect] = connectvar
+
+        for ic in self.PEALogic.Interconnects:            
+            # wire vars
+            wirevar = WireVar(self, ic.src, ic.dst)
+ #           print(wirevar.name)
+            wire = (ic.src, ic.dst)
+            self.WireVars[wire] = wirevar
+
+        for ic in self.PEALogic.Interconnects:
+            # omuxuse vars
+            if ic.omux == None:
+                continue
             omuxuse = (ic.src, ic.omux)
-            if omuxuse in self.OMUXUseVars: continue
-            omuxusevar = OMUXUseVar(self, ic.src, ic.omux); self.OMUXUseVars[omuxuse] = omuxusevar
+            if omuxuse in self.OMUXUseVars:
+                #print("Found duplication in OMUXUseVars")
+                continue
+            omuxusevar = OMUXUseVar(self, ic.src, ic.omux)
+ #           print(omuxusevar.name)
+            self.OMUXUseVars[omuxuse] = omuxusevar
+            
+#        print("----- ConnectVars")                        
+#        for v in self.ConnectVars.keys():
+#            print(f"{v[0].name}, ", end="")            
+#            if v[1] != None:
+#                print(f"{v[1].name}, ", end="")
+#            print(f"{v[2].name}")
+
+#        print("----- OMUXUseVars")            
+#        for v in self.OMUXUseVars.keys():
+#            print(f"{v[0].name}, ", end="")
+#            print(f"{v[1].name}")            
+
+#        print("----- WireVars")            
+#        for v in self.WireVars.keys():
+#            print(f"{v[0].name}, ", end="")
+#            print(f"{v[1].name}")            
+
+# ... (SATmgrクラスなどの後) ...
 
 
-# ==================================================================
-# ★ ブロック3: 新しい main() 関数 ★
-# (pea.pyのmainを改造し、wirestat_final.txtを読み込む)
-# ==================================================================
+
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('netlist_file', help='検証したいネットリストのファイル名(独自形式)')
+    parser.add_argument('file', help='入力ネットリストファイル (.net)')
+    # --ws_count引数は削除し、構造ファイルを指定するように変更
+    parser.add_argument('--struct', default='wirestat_final.txt', help='配線構造ファイル')
     args = parser.parse_args()
-    print(f"Verifying netlist: {args.netlist_file}")
 
-    # --- 1. アーキテクチャの基本設定 ---
-    FINAL_ARCH_FILE = "wirestat_final.txt" # ★ build_wire.py が出力したファイル
-    NUM_PIS = 36
-    GRID_X = 4
-    GRID_Y = 4
-    INPUT_SPACING = 0.18 # ★ PI座標の計算ロジック (整数版)
+    print(f"Target Netlist: {args.file}")
+    print(f"Architecture File: {args.struct}")
     
-    # --- 2. PEALogicの器を作成 ---
-    pl = PEALogic(numPIs=NUM_PIS)
-    for _ in range(GRID_Y): # 4レーン
-        # ★ Laneコンストラクタを、sa_out.pyと一致させる (nPAEout=3)
-        pl.addLane(Lane(nPAECells=GRID_X, nOMUXes=12, nSkipOMUXes=0, nPAEout=3))
-
-    # --- 3. PIの物理座標 -> PIオブジェクト の対応マップを作成 ---
-    # (build_wire.py と「全く同じ」ロジックで座標を生成)
-    pi_coord_to_object_map = {}
+    # 1. PEA Logic (FPGA本体) の構築
+    # -----------------------------------------
+    pl = PEALogic(numPIs=36) 
     
-    # ★ 整数座標ロジック ★
-    for i in range(NUM_PIS):
-        x_coord = i % GRID_X
-        coord = (float(x_coord), -1.0) # (x, y) タプル
-        pi_coord_to_object_map[coord] = pl.PIs[i]
-    
-    print(f"Mapped {len(pi_coord_to_object_map)} PI objects to physical coordinates.")
+    # 4つのレーンを作成 (4x4構成)
+    for _ in range(4):
+        pl.addLane(Lane(nPAECells=4, nIMUXins=4, nOMUXes=12, nPAEout=3, noOMUX=False))
 
-    # --- 4. 最終アーキテクチャファイル(wirestat_final.txt)を読み込み、配線を構築 ---
-    print(f"Loading final architecture from '{FINAL_ARCH_FILE}'...")
-    if not os.path.exists(FINAL_ARCH_FILE):
-        print(f"Error: Final architecture file '{FINAL_ARCH_FILE}' not found.")
-        print("Please run build_wire.py first.")
-        return
+    # 2. 配線構造の読み込みと接続
+    wirestats = WireStats(args.struct)
 
-    internal_wires_loaded = 0
-    pi_wires_loaded = 0
-    
-    with open(FINAL_ARCH_FILE, 'r') as f:
-        for line in f:
-            if line.startswith("#"): continue
-            try:
-                parts = line.strip().split()
-                if len(parts) != 6: continue
-                
-                # (src_x, src_y, src_pin, dst_x, dst_y, dst_pin)
-                # ★ 座標は整数として読み込む ★
-                src_x = float(parts[0]) # PIのX座標は小数/整数の可能性があるためfloat
-                src_y = float(parts[1]) # PIのY座標
-                src_pin = int(parts[2])
-                dst_x, dst_y, dst_pin = int(parts[3]), int(parts[4]), int(parts[5])
+    count_internal = 0
+    count_external = 0
 
-                if src_y < 0 or src_pin == -1:
-                    # --- 4a. 外部入力(PI)配線の接続 ---
-                    pi_coord = (src_x, src_y)
-                    pi_obj = pi_coord_to_object_map.get(pi_coord)
-                    
-                    if pi_obj:
-                        pl.connectPI_wire(pi_obj, dst_x, dst_y, dst_pin)
-                        pi_wires_loaded += 1
-                    else:
-                        print(f"Warning: PI coordinate {pi_coord} not found in map.")
-                else:
-                    # --- 4b. 内部配線(Cell->Cell)の接続 ---
-                    pl.connectPAEs(int(src_x), int(src_y), src_pin, dst_x, dst_y, dst_pin)
-                    internal_wires_loaded += 1
-                    
-            except (ValueError, IndexError, TypeError):
-                print(f"Skipping malformed line in {FINAL_ARCH_FILE}: {line.strip()}")
-                continue
-    
-    print(f"Architecture built: {internal_wires_loaded} internal wires, {pi_wires_loaded} PI wires.")
+    for ws in wirestats.stats:
+        # 判定: src_y が -1 または src_outnum が -1 なら「外部入力(PI)」(WireStatクラスの変数名 src_outnum を使用)
+        is_external = (ws.src_y == -1) or (ws.src_outnum == -1)
 
-    # --- 5. PO（外部出力）の接続 (従来通り) ---
+        if is_external:
+            # --- 外部入力 (PI -> IMUX) ---
+            # ws.src_x が PIのインデックス (0~35)
+            if 0 <= ws.src_x < len(pl.PIs):
+                pi_obj = pl.PIs[ws.src_x]
+                # dst_innum は入力ピン番号
+                pl.connectPI_wire(pi_obj, ws.dst_x, ws.dst_y, ws.dst_innum)
+                count_external += 1
+            else:
+                print(f"Warning: PI index {ws.src_x} out of range.")
+
+        else:
+            # --- 内部配線 (PAE -> IMUX) ---
+            # 変数名を WireStat クラスに合わせる
+            pl.connectPAEs(ws.src_x, ws.src_y, ws.src_outnum, ws.dst_x, ws.dst_y, ws.dst_innum)
+            count_internal += 1
+
+    print(f"Architecture built: {count_internal} internal wires, {count_external} external inputs connected.")
+
+    # 3. 外部出力 (PO) の生成
+    # -----------------------------------------
     pl.generateAndconnectPOs(directOutput=True, outputLastLane=False)
+    
+    # 4. ネットリストの読み込みとチェック
+    # -----------------------------------------
+    netlist = Netlist(args.file)
 
-    # --- 6. 検証対象のネットリストを読み込み ---
-    netlistFile = args.netlist_file
-    if not os.path.exists(netlistFile):
-        print(f"Error: Netlist file '{netlistFile}' not found.")
-        return
-        
-    netlist = Netlist(netlistFile)
-
-    # --- 7. リソースチェック (従来通り) ---
     print(f"In netlist, numPIs={netlist.numPIs}, numPOs={netlist.numPOs}")
-    if pl.numPIs < netlist.numPIs:
-        print("Error: Not enough physical PIs in architecture for this netlist.")
-        exit(1) # 失敗
-    totalNumPAECells = len(pl.PAECells)
-    if totalNumPAECells < len(netlist.PAEInstances):
-        print("Error: Not enough physical PAE Cells in architecture for this netlist.")
-        exit(1) # 失敗
 
-    # --- 8. SAT求解 (従来通り) ---
-    print("Enumerating interconnects and building SAT problem...")
+    if pl.numPIs < netlist.numPIs:
+        print(f"Error: Not enough PIs. Arch has {pl.numPIs}, Netlist needs {netlist.numPIs}")
+        exit(1)
+    
+    totalNumPAECells = sum(l.nPAECells for l in pl.lanes)
+    if totalNumPAECells < len(netlist.PAEInstances):
+        print("Error: Not enough PAE Cells.")
+        exit(1)
+
+    # 5. SATソルバによる P&R 実行
+    # -----------------------------------------
     pl.enumerateInterconnects()
+    
     satmgr = SATmgr(pl, netlist)
     
-    print("Running SAT solver (kissat)...")
-    satmgr.solveSAT()
-    
+    # Kissatを使用
     trueVars = satmgr.readSATResultKissat() 
-
+    
     if len(trueVars) == 0:
-        print("\n--- RESULT: P&R solution not found (UNSAT) ---")
-        exit(1) # 失敗をシェルに通知
+        print("\n[RESULT] UNSAT: Routing Failed.")
+        exit(1)
     else:
-        print("\n--- RESULT: P&R solution FOUND (SAT) ---")
+        print("\n[RESULT] SAT: Routing Successful!")
 
-    # --- 9. 構成メモリ計算 (オプション) ---
+    # 6. 構成メモリ (ConfBits) の集計
+    # -----------------------------------------
     numConfBits = 0
-    for m in pl.IMUXes:
-        numConfBits += m.numConfBits()
-    for m in pl.OMUXes:
-        numConfBits += m.numConfBits()
-    
-    print(f"Total Configuration Bits (IMUXes + OMUXes): {numConfBits}")
+    print("\n--- Configuration Bits Details ---")
+    for l in pl.lanes:
+        for pae in l.PAECells:
+            for m in pae.IMUXes:
+                bits = m.numConfBits()
+                numConfBits += bits
+                # if bits > 0: print(f"{m.name}: inputs={len(m.inputs)}, bits={bits}")
 
-# ==================================================================
-# ★ ブロック4: 実行の起点 ★
-# ==================================================================
-if __name__ == '__main__':
-    # クラスのカウンタをリセット
-    PI.count = 0; PO.count = 0; OMUX.count = 0; PAECell.count = 0; Lane.count = 0
-    Var.count = 1; Interconnect.count = 0; Clause.count = 0
-    NetlistPI.count = 0; NetlistPO.count = 0; PAEInstance.count = 0
-    Wire.count = 0; Edge.count = 0
+    print(f"Total Configuration Bits: {numConfBits}")
     
+'''
+    #以下は描画関連
+    def saveGraph_AC(self, filename:str="cell_graph"):
+
+        cellgraph = graphviz.Digraph('cell graph', format='png', filename='cell_graph')
+
+        cellgraph.graph_attr['ranksep'] = "3"
+
+        # label subgraph r with
+        with cellgraph.subgraph(name="root") as r:
+            #r.graph_attr['rankdir'] = 'TB'
+
+            # in
+            with r.subgraph(name="cluster_in") as cluster_in:
+                cluster_in.graph_attr['rankdir'] = 'LR'
+                for pi in self.PIs:
+                    cluster_in.node(pi.name,shape=GL.ShapePI,
+                                    fillcolor=GL.ColorPI,style="filled")
+                    
+            with r.subgraph(name="cluster_out") as cluster_out:
+                cluster_out.graph_attr['rankdir'] = 'LR'
+                for po in self.POs:
+                    cluster_out.node(po.name,shape=GL.ShapePO,
+                                     fillcolor=GL.ColorPO,style="filled")
+                    
+            for i, lane in enumerate(self.lanes): # label LANE loop node
+                ## laneごとにサブグラフを作成
+                # label subgraph l with
+                with r.subgraph(name="cluster_lane{}".format(i)) as l:
+                    #l.graph_attr['rankdir'] = 'TB'
+                    # 最終レーンならsink属性をつける
+                    if i == len(self.lanes) - 1 :
+                        l.graph_attr['rank'] = "sink"
+
+                    freq = len(GL.LaneBGColorList)
+                    l.graph_attr['bgcolor'] = GL.LaneBGColorList[i%freq]
+
+                    # PAECell, それに属するIMUXを用意
+                    with l.subgraph(name="cluster_imux_lane{}".format(i)) as ig:
+                        
+                        ig.graph_attr['rankdir'] = 'LR'
+                        ig.graph_attr['rank'] = 'source'
+                        for PAECell in lane.PAECells:
+                            # IMUX
+                            for imux in PAECell.IMUXes:
+                                imuxname = imux.name
+
+                                ig.node(imuxname, shape=GL.ShapeIMUX,
+                                        fillcolor=GL.ColorIMUX, style="filled")
+                            
+                    # PAE
+                    # IMUXより下に置く
+                    with l.subgraph(name="cluster_pae_lane{}".format(i)) as pg:
+                        pg.graph_attr['rankdir'] = 'LR'
+                        pg.graph_attr['rank'] = 'same'
+
+                        for PAECell in lane.PAECells:
+                            paename = PAECell.name
+                            pg.node(paename, shape=GL.ShapePAECell,
+                                    fillcolor=GL.ColorPAECell, style="filled")
+
+                    # OMUX, skipOMUXを用意
+                    with l.subgraph(name="cluster_omuxes_lane{}".format(i)) as osg:
+                        osg.graph_attr['rankdir'] = 'LR'
+                        osg.graph_attr['rank'] = 'sink'
+
+                        with osg.subgraph(name="cluster_omux_lane{}".format(i)) as og:
+                            og.graph_attr['rank'] = "min"
+                            for omux in lane.OMUXes:
+                                # 先頭を決め打ち
+                                # 現状、OMUXのinputは同一laneのPAEのみなので決め打ちできる。
+                                omuxname = omux.name
+                                og.node(omuxname, shape=GL.ShapeOMUX,
+                                        fillcolor=GL.ColorOMUX, style="filled")
+                        with osg.subgraph(name="cluster_somux_lane{}".format(i)) as sog:
+                            sog.graph_attr['rank'] = "max"
+                            for skipOMUX in lane.skipOMUXes:
+                                omuxname = skipOMUX.name
+                                sog.node(omuxname,shape=GL.ShapeSkipOMUX,
+                                        fillcolor=GL.ColorSkipOMUX, style="filled")
+        # ノード作成            
+        #---------------------------------------------------------------------
+        # エッジ作成
+                                
+        for lane in self.lanes: # label LANE loop edge
+            # PAECellを探索
+            for PAECell in lane.PAECells: # label PAECELL loop
+                paename = PAECell.name
+                # 入力されているIMUXを探索
+                for imux in PAECell.IMUXes:
+                    imuxname = imux.name
+
+                    cellgraph.edge(imuxname, paename) # imux -> paeの接続を作成
+
+                    for input_signal in imux.inputs: # LABEL inputs loop
+                        in_name = input_signal.name
+                        # skipOMUXなら矢印の色を変える
+                        # 自分への接続
+                        if hasattr(input_signal, 'skipLength') == False:
+                            cellgraph.edge(in_name, imuxname) # pi or omux -> imuxの接続を作成
+                        elif input_signal in lane.skipOMUXes:
+                            cellgraph.edge(in_name, imuxname, color = GL.ColorSkipArrowOutSelf)
+                        elif input_signal.skipLengths != None:
+                            cellgraph.edge(in_name, imuxname, color = GL.ColorSkipArrowOutNotSelf)
+                        else:
+                            # 通常色
+                            cellgraph.edge(in_name, imuxname) # pi or omux -> imuxの接続を作成
+
+            # #################
+            # label PAECELL loop
+            # #################
+
+            # OMUXを探索
+            for omux in lane.OMUXes:
+                # 入力されているPAEOutを探索
+                # 2入力なら2本接続したいので、重複を考慮しない
+                for PAEOut in omux.inputs:
+                    omuxname = omux.name
+                    paename = PAEOut.paecell.name
+                    cellgraph.edge(paename, omuxname) # pae -> omuxの接続を作成
+
+            # skipOMUXを探索
+            for skipOMUX in lane.skipOMUXes:
+                # 入力されているPAEOutを探索
+                # 3入力なら3本接続したいので、重複を考慮しない
+                for PAEOut in skipOMUX.inputs:
+                    omuxname = skipOMUX.name
+                    paename = PAEOut.paecell.name
+                    cellgraph.edge(paename, omuxname, color=GL.ColorSkipArrowIn) # pae -> skipomuxの接続を作成
+
+        # #####################
+        # label LANE loop edge
+        # #####################
+
+        for po in self.POs:
+            poname = po.name
+            for src in po.srcs:
+                paename = src.paecell.name
+                cellgraph.edge(paename, poname)
+
+        cellgraph.render(filename)
+
+
+
+    def saveGraph(self, trueVars, filename:str="cell_graph"):
+
+        # のちの探索性のために、solverの回答からリストを作成
+        if trueVars is not None:
+            for cstart, Var in enumerate(trueVars):
+                if isinstance(Var, ConnectVar):
+                    break
+
+            for wstart, Var in enumerate(trueVars):
+                if isinstance(Var, WireVar):
+                    break
+
+            for ustart, Var in enumerate(trueVars):
+                if isinstance(Var, OMUXUseVar):
+                    break
+
+            bindVars = trueVars[:cstart]
+            connectVars = trueVars[cstart:wstart]
+            wireVars = trueVars[wstart:ustart] # not used
+            useomuxVars = trueVars[ustart:]
+
+            # ターゲット名リストを作成
+            l_b_target = []
+            for bindVar in bindVars:
+                l_b_target.append(bindVar.target.name)
+
+            # 接続されているimux名リストを作成
+            l_c_imux = []
+            # 接続されているomux名リストを作成
+            l_c_omux = []
+
+            for connectVar in connectVars:
+                if isinstance(connectVar.dst, IMUX):
+                    l_c_imux.append(connectVar.dst.name)
+
+                if isinstance(connectVar.omux, OMUX):
+                    l_c_omux.append(connectVar.omux.name)
+
+            # 使用されているomux名リストを作成
+            l_u_omux = []
+            for useomuxVar in useomuxVars:
+                # .omuxは必ずOMUXのインスタンスなので、if不要
+                l_u_omux.append(useomuxVar.omux.name)
+
+        else:
+            print("if set AllConnection False, trueVars shall be input")
+            exit(1)
+
+        cellgraph = graphviz.Digraph('cell graph', format='png', filename='cell_graph')
+
+        cellgraph.graph_attr['ranksep'] = "3"
+
+        # nodeを作成(成形・配置のため)
+
+        # label subgraph r with
+        with cellgraph.subgraph(name="root") as r:
+            #r.graph_attr['rankdir'] = 'TB'
+
+            # in
+            with r.subgraph(name="cluster_in") as cluster_in:
+                cluster_in.graph_attr['rankdir'] = 'LR'
+                for pi in self.PIs:
+                    if pi.name in l_b_target:
+
+                        fill = GL.ColorBind
+
+                    else:
+                        fill = GL.ColorPI
+
+                    cluster_in.node(pi.name,shape=GL.ShapePI,
+                                    fillcolor=fill,style="filled")
+
+            # out
+            with r.subgraph(name="cluster_out") as cluster_out:
+                cluster_out.graph_attr['rankdir'] = 'LR'
+                for po in self.POs:
+                    if po.name in l_b_target:
+                        fill = GL.ColorBind
+                    else:
+                        fill = GL.ColorPO
+
+                    cluster_out.node(po.name,shape=GL.ShapePI,
+                                     fillcolor=fill,style="filled")
+            # lane
+            
+            for i, lane in enumerate(self.lanes): # label LANE loop node
+                ## laneごとにサブグラフを作成
+                # label subgraph l with
+                with r.subgraph(name="cluster_lane{}".format(i)) as l:
+                    #l.graph_attr['rankdir'] = 'TB'
+                    # 最終レーンならsink属性をつける
+                    if i == len(self.lanes) - 1 :
+                        l.graph_attr['rank'] = "sink"
+
+                    freq = len(GL.LaneBGColorList)
+                    l.graph_attr['bgcolor'] = GL.LaneBGColorList[i%freq]
+
+                    # PAECell, それに属するIMUXを用意
+                    with l.subgraph(name="cluster_imux_lane{}".format(i)) as ig:
+                        
+                        ig.graph_attr['rankdir'] = 'LR'
+                        ig.graph_attr['rank'] = 'source'
+                        for PAECell in lane.PAECells:
+                            # IMUX
+                            for imux in PAECell.IMUXes:
+                                imuxname = imux.name
+
+                                #connectに登場するIMUXなら色を変える
+                                if imuxname in l_c_imux:
+                                    fill=GL.ColorBind
+                                else:
+                                    fill=GL.ColorIMUX
+                                    
+                                ig.node(imuxname, shape=GL.ShapeIMUX,
+                                        fillcolor=fill, style="filled")
+                            
+                    # PAE
+                    # IMUXより下に置く
+                    with l.subgraph(name="cluster_pae_lane{}".format(i)) as pg:
+                        pg.graph_attr['rankdir'] = 'LR'
+                        pg.graph_attr['rank'] = 'same'
+
+                        for PAECell in lane.PAECells:
+                            paename = PAECell.name
+
+                            if paename in l_b_target:
+                                fill = GL.ColorBind
+                            else:
+                                fill = GL.ColorPAECell
+
+                            pg.node(paename, shape=GL.ShapePAECell,
+                                    fillcolor=fill, style="filled")
+
+                    # OMUX, skipOMUXを用意
+                    with l.subgraph(name="cluster_omuxes_lane{}".format(i)) as osg:
+                        osg.graph_attr['rankdir'] = 'LR'
+                        osg.graph_attr['rank'] = 'sink'
+
+                        with osg.subgraph(name="cluster_omux_lane{}".format(i)) as og:
+                            og.graph_attr['rank'] = "min"
+                            for omux in lane.OMUXes:
+                                omuxname = omux.name
+
+                                if omuxname in l_u_omux:
+                                    fill = GL.ColorBind
+                                else:
+                                    fill = GL.ColorOMUX
+                                    print(GL.ColorOMUX)
+
+                                og.node(omuxname, shape=GL.ShapeOMUX,
+                                        fillcolor=fill, style="filled")
+                                
+                        with osg.subgraph(name="cluster_somux_lane{}".format(i)) as sog:
+                            sog.graph_attr['rank'] = "max"
+                            for skipOMUX in lane.skipOMUXes:
+                                omuxname = skipOMUX.name
+
+                                if omuxname in l_u_omux:
+                                    fill = GL.ColorBind
+                                else:
+                                    fill = GL.ColorSkipOMUX
+
+                                sog.node(omuxname,shape=GL.ShapeSkipOMUX,
+                                         fillcolor=fill, style="filled")
+
+                # #####################
+                # label subgraph l with
+                # #####################
+
+            # #####################
+            # label LANE loop node
+            # #####################
+
+        # #####################
+        # label subgraph r with
+        # #####################
+
+        for connectVar in connectVars:
+            if connectVar.omux is not None:
+                # .nameすると--で表示される接続
+                src = connectVar.omux.name
+                dst = connectVar.dst.name
+                cellgraph.edge(src, dst, color=GL.ColorConnect)
+
+                src = connectVar.src.paecell.name
+                dst = connectVar.omux.name
+                cellgraph.edge(src, dst, color=GL.ColorConnect)
+
+            else:
+                if isinstance(connectVar.src, PI):
+                    src = connectVar.src.name
+                if isinstance(connectVar.src, PAEOutput):
+                    src = connectVar.src.paecell.name
+                dst = connectVar.dst.name
+                cellgraph.edge(src, dst, color=GL.ColorConnect)
+
+            #別のif omuxの有無にかかわらず、imuxがdstであるパターンはある。
+            #imuxからPAEへの接続(IMUXの要素から推定できる)
+            if isinstance(connectVar.dst, IMUX):
+                src = connectVar.dst.name
+                dst = connectVar.dst.paecell.name
+                cellgraph.edge(src, dst, color=GL.ColorConnect)
+
+        # レイアウトのために、pae->omuxへの接続を1本ずつ作成(不可視にする)
+        for i, lane in enumerate(self.lanes): # label LANE loop node
+            for omux in lane.OMUXes:
+                # OMUXとPAEが同一レーン内でのみ接続される前提の論理。
+                # レーン外のPAEからOMUXに接続する可能性がある場合、拡張が必要
+                # また、omuxのインプットの0番を決め打ちしている。
+                src = omux.inputs[0].paecell.name
+                dst = omux.name
+                cellgraph.edge(src, dst, style="invis")
+
+            for skipomux in lane.skipOMUXes:
+                # OMUXとPAEが同一レーン内でのみ接続される前提の論理。
+                # レーン外のPAEからOMUXに接続する可能性がある場合、拡張が必要
+                # また、omuxのインプットの0番を決め打ちしている。
+                src = skipomux.inputs[0].paecell.name
+                dst = skipomux.name
+                cellgraph.edge(src, dst, style="invis")
+ 
+        cellgraph.render(filename)
+'''
+    
+if __name__ == '__main__':
     main()

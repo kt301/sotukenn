@@ -338,7 +338,7 @@ def main():
     # --- 3. 最終的な統計ファイルの書き出し ---
     sortedWireStats = dict(sorted(wireStats_total_usage.items(), key=lambda item: item[1], reverse=True))
     print(f"\nTotal {len(sortedWireStats)} unique wires used (sum). Saving to wire_stats.txt...")
-    with open("wire_stats.txt", "w") as f:
+    with open("wire_stats9.txt", "w") as f:
         for wire_tuple, count in sortedWireStats.items():
             f.write(f"{' '.join(map(str, wire_tuple))} {count}\n")
 

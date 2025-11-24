@@ -2,9 +2,11 @@ import itertools
 import argparse
 import subprocess
 import math
+import glob
 import graphviz
 import GraphLegends as GL
 import re
+import sys
 import os 
 from collections import defaultdict 
 
@@ -1568,100 +1570,147 @@ class SATmgr: # SAT関係の情報を蓄えるクラス
 
 
 
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('file', help='入力ネットリストファイル (.net)')
-    # --ws_count引数は削除し、構造ファイルを指定するように変更
-    parser.add_argument('--struct', default='wirestat_final.txt', help='配線構造ファイル')
-    args = parser.parse_args()
+    # ================= 設定 =================
+    NETLIST_DIR = "netlists_500/*.net" # 環境に合わせて書き換えてください
+    STRUCT_FILE = "wirestat_final.txt"
+    LOG_FILE = "sat_debug.log"              # デバッグログの出力先
+    # ========================================
 
-    print(f"Target Netlist: {args.file}")
-    print(f"Architecture File: {args.struct}")
+    # 実行のたびにログファイルを空にする（上書きモードで開いてすぐ閉じる）
+    with open(LOG_FILE, "w") as f:
+        f.write("=== SAT Debug Log ===\n")
+
+    print(f"Loading Architecture Structure from: {STRUCT_FILE}")
+    print(f"Debug logs will be saved to: {LOG_FILE}")
     
-    # 1. PEA Logic (FPGA本体) の構築
-    # -----------------------------------------
+    # 1. PEA Logic 构建
     pl = PEALogic(numPIs=36) 
-    
-    # 4つのレーンを作成 (4x4構成)
     for _ in range(4):
         pl.addLane(Lane(nPAECells=4, nIMUXins=4, nOMUXes=12, nPAEout=3, noOMUX=False))
 
-    # 2. 配線構造の読み込みと接続
-    wirestats = WireStats(args.struct)
-
-    count_internal = 0
-    count_external = 0
-
+    # 2. 配線構造読み込み
+    wirestats = WireStats(STRUCT_FILE)
     for ws in wirestats.stats:
-        # 判定: src_y が -1 または src_outnum が -1 なら「外部入力(PI)」(WireStatクラスの変数名 src_outnum を使用)
         is_external = (ws.src_y == -1) or (ws.src_outnum == -1)
-
         if is_external:
-            # --- 外部入力 (PI -> IMUX) ---
-            # ws.src_x が PIのインデックス (0~35)
             if 0 <= ws.src_x < len(pl.PIs):
-                pi_obj = pl.PIs[ws.src_x]
-                # dst_innum は入力ピン番号
-                pl.connectPI_wire(pi_obj, ws.dst_x, ws.dst_y, ws.dst_innum)
-                count_external += 1
-            else:
-                print(f"Warning: PI index {ws.src_x} out of range.")
-
+                pl.connectPI_wire(pl.PIs[ws.src_x], ws.dst_x, ws.dst_y, ws.dst_innum)
         else:
-            # --- 内部配線 (PAE -> IMUX) ---
-            # 変数名を WireStat クラスに合わせる
             pl.connectPAEs(ws.src_x, ws.src_y, ws.src_outnum, ws.dst_x, ws.dst_y, ws.dst_innum)
-            count_internal += 1
 
-    print(f"Architecture built: {count_internal} internal wires, {count_external} external inputs connected.")
-
-    # 3. 外部出力 (PO) の生成
-    # -----------------------------------------
     pl.generateAndconnectPOs(directOutput=True, outputLastLane=False)
-    
-    # 4. ネットリストの読み込みとチェック
-    # -----------------------------------------
-    netlist = Netlist(args.file)
-
-    print(f"In netlist, numPIs={netlist.numPIs}, numPOs={netlist.numPOs}")
-
-    if pl.numPIs < netlist.numPIs:
-        print(f"Error: Not enough PIs. Arch has {pl.numPIs}, Netlist needs {netlist.numPIs}")
-        exit(1)
-    
-    totalNumPAECells = sum(l.nPAECells for l in pl.lanes)
-    if totalNumPAECells < len(netlist.PAEInstances):
-        print("Error: Not enough PAE Cells.")
-        exit(1)
-
-    # 5. SATソルバによる P&R 実行
-    # -----------------------------------------
     pl.enumerateInterconnects()
-    
-    satmgr = SATmgr(pl, netlist)
-    
-    # Kissatを使用
-    trueVars = satmgr.readSATResultKissat() 
-    
-    if len(trueVars) == 0:
-        print("\n[RESULT] UNSAT: Routing Failed.")
-        exit(1)
-    else:
-        print("\n[RESULT] SAT: Routing Successful!")
 
-    # 6. 構成メモリ (ConfBits) の集計
-    # -----------------------------------------
+    # 3. 500個処理
+    netlist_files = sorted(glob.glob(NETLIST_DIR))
+    
+    if not netlist_files:
+        print(f"Error: No .net files found in {NETLIST_DIR}")
+        return
+
+    print(f"Found {len(netlist_files)} netlists. Start processing...")
+
+    success_count = 0
+    total_count = 0
+    failed_list = []
+
+    for net_file in netlist_files:
+        # =======================================================
+        # ★【重要】カウンターのリセット (ここを追加！)
+        # ループ毎にIDを初期化しないと、CNFのヘッダー数と中身がズレます
+        # =======================================================
+        Var.count = 1      # SAT変数は1からスタート
+        Clause.count = 0   # 制約数は0から
+        Literal.count = 0
+        
+        # ネットリスト読み込みクラスのカウンターもリセット
+        NetlistPI.count = 0
+        NetlistPO.count = 0
+        PAEInstance.count = 0
+        Wire.count = 0
+        Edge.count = 0
+        # =======================================================
+        total_count += 1
+        short_name = os.path.basename(net_file)
+        
+        # 進捗表示 (これはターミナルに出したいので、リダイレクト前に実行)
+        print(f"\rProcessing [{total_count}/{len(netlist_files)}] ... {short_name:<20}", end="", flush=True)
+
+        # ★ここからログファイルへ出力を切り替え
+        # -------------------------------------------------------
+        original_stdout = sys.stdout  # 元の出力先(ターミナル)を保存
+        try:
+            with open(LOG_FILE, "a") as log_f: # 追記モードで開く
+                sys.stdout = log_f             # 出力先をファイルに変更
+                
+                # ファイルの中に区切り線を入れる
+                print(f"\n\n{'='*30}\nProcessing: {short_name}\n{'='*30}")
+
+                # --- ここから下のprintはすべてファイルに書かれます ---
+                netlist = Netlist(net_file)
+                
+                # リソースチェック
+                if (pl.numPIs < netlist.numPIs) or (sum(l.nPAECells for l in pl.lanes) < len(netlist.PAEInstances)):
+                    print("-> Skipped (Resource shortage)")
+                    # 出力を戻してからリスト追加
+                    sys.stdout = original_stdout
+                    failed_list.append(short_name)
+                    continue
+
+                # SAT実行
+                satmgr = SATmgr(pl, netlist)
+                trueVars = satmgr.readSATResultKissat()
+                
+                if len(trueVars) > 0:
+                    print("-> SAT Success")
+                    # 出力を戻してからカウント
+                    sys.stdout = original_stdout
+                    success_count += 1
+                else:
+                    print("-> UNSAT Failed")
+                    # 出力を戻してからリスト追加
+                    sys.stdout = original_stdout
+                    failed_list.append(short_name)
+
+        except Exception as e:
+            # エラーが起きても必ず出力をターミナルに戻す
+            sys.stdout = original_stdout 
+            print(f" Error: {e}", end="") # ターミナルにもエラー表示
+            with open(LOG_FILE, "a") as log_f:
+                log_f.write(f"\nEXCEPTION: {e}\n")
+            failed_list.append(short_name)
+            continue
+        finally:
+            # 安全のため、確実に元に戻す
+            sys.stdout = original_stdout
+        # -------------------------------------------------------
+        # ★ここまで切り替え完了
+
+    # 4. 最終結果表示 (ターミナルに表示)
+    print("\n\n" + "="*40)
+    print("            FINAL RESULT            ")
+    print("="*40)
+
+    if len(failed_list) > 0:
+        print("Failed Netlists:")
+        for name in failed_list:
+            print(f"  - {name}")
+    else:
+        print("Failed Netlists: None (All Perfect!)")
+    
+    print("-" * 40)
+    print(f"Success Rate      : {success_count} / {len(netlist_files)}  ({(success_count/len(netlist_files))*100:.2f}%)")
+
     numConfBits = 0
-    print("\n--- Configuration Bits Details ---")
     for l in pl.lanes:
         for pae in l.PAECells:
             for m in pae.IMUXes:
-                bits = m.numConfBits()
-                numConfBits += bits
-                # if bits > 0: print(f"{m.name}: inputs={len(m.inputs)}, bits={bits}")
+                numConfBits += m.numConfBits()
+    print(f"Configuration Bits: {numConfBits}")
+    print(f"Debug Log Saved to: {LOG_FILE}")
+    print("="*40)
 
-    print(f"Total Configuration Bits: {numConfBits}")
     
 '''
     #以下は描画関連

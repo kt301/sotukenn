@@ -6,13 +6,13 @@ from collections import defaultdict
 #  設定項目
 # ===================================================================
 # 読み込むファイル (SA_out.pyが出力した7要素のファイル)
-INPUT_FILE = "wire_stats.txt" 
+INPUT_FILE = "wire_stats12.txt" 
 
 # 出力するファイル名 (MUXの入力数が記録される)
 OUTPUT_FILE = "imux_in.txt"
 
 # 適用する閾値 (この使用回数「未満」の配線は間引かれます)
-THRESHOLD = 3  # (例: 10を指定すると、10回以上の配線が採用される)
+THRESHOLD = 0
 
 # SA_out.pyで設定したグリッドサイズと合わせる
 GRID_X = 4

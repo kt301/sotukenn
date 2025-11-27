@@ -3,11 +3,11 @@
 ========================================================
 [Execution Parameters]
   Iterations:       100000
-  Cooling Rate:     0.995
+  Cooling Rate:     0.999
   Grid Size:        4 x 4
 
 [Cost Function Weights]
-  Shared Bonus:     -10 (Rule 3)
+  Shared Bonus:     -10000 (Rule 3)
   Adjacency Bonus:  10000 (Rule 1: -M)
   Skip Penalty:     2 (w_ff)
   Feedback Penalty: 10 (w_fb)
@@ -15,33 +15,33 @@
   New PI Penalty:   0 (w_io)
 ========================================================
 
---- Configuration Memory Analysis (based on 2612 unique wires) ---
+--- Configuration Memory Analysis (based on 2383 unique wires) ---
 Total unique MUX ports used: 64
 
 Detailed MUX Input Breakdown (Top 20 most inputs):
 MUX Key (x, y, pin)       | Total Inputs | Internal   | External (PI) | Conf. Bits
 --------------------------+--------------+------------+------------+-----------
-(2, 3, 0)                 | 52           | 28         | 24         | 6
-(1, 3, 0)                 | 51           | 26         | 25         | 6
-(0, 2, 0)                 | 51           | 28         | 23         | 6
-(2, 2, 0)                 | 50           | 22         | 28         | 6
-(3, 2, 1)                 | 49           | 22         | 27         | 6
-(3, 2, 0)                 | 49           | 22         | 27         | 6
-(2, 3, 1)                 | 49           | 25         | 24         | 6
-(0, 3, 0)                 | 48           | 22         | 26         | 6
-(1, 2, 1)                 | 48           | 26         | 22         | 6
-(0, 1, 0)                 | 46           | 17         | 29         | 6
-(1, 1, 0)                 | 46           | 22         | 24         | 6
-(1, 2, 0)                 | 46           | 22         | 24         | 6
-(1, 1, 1)                 | 46           | 20         | 26         | 6
-(0, 2, 1)                 | 46           | 22         | 24         | 6
-(0, 3, 1)                 | 46           | 29         | 17         | 6
-(1, 3, 1)                 | 46           | 28         | 18         | 6
-(3, 3, 0)                 | 46           | 22         | 24         | 6
-(3, 2, 2)                 | 45           | 21         | 24         | 6
-(2, 2, 2)                 | 45           | 23         | 22         | 6
-(1, 1, 2)                 | 44           | 18         | 26         | 6
+(2, 2, 2)                 | 47           | 23         | 24         | 6
+(3, 3, 0)                 | 46           | 23         | 23         | 6
+(1, 2, 0)                 | 45           | 22         | 23         | 6
+(2, 2, 1)                 | 45           | 22         | 23         | 6
+(1, 3, 0)                 | 44           | 23         | 21         | 6
+(0, 2, 0)                 | 44           | 21         | 23         | 6
+(0, 1, 0)                 | 43           | 22         | 21         | 6
+(0, 1, 1)                 | 43           | 22         | 21         | 6
+(1, 2, 1)                 | 43           | 25         | 18         | 6
+(1, 3, 1)                 | 43           | 26         | 17         | 6
+(3, 2, 0)                 | 42           | 20         | 22         | 6
+(2, 2, 0)                 | 42           | 18         | 24         | 6
+(0, 3, 0)                 | 42           | 23         | 19         | 6
+(1, 2, 2)                 | 42           | 20         | 22         | 6
+(0, 2, 1)                 | 42           | 21         | 21         | 6
+(2, 1, 1)                 | 42           | 18         | 24         | 6
+(3, 0, 1)                 | 42           | 17         | 25         | 6
+(0, 2, 2)                 | 41           | 22         | 19         | 6
+(1, 1, 2)                 | 41           | 20         | 21         | 6
+(1, 1, 1)                 | 41           | 19         | 22         | 6
 ...
 
-Total Feedback Wires in Final Architecture: 167
-Total Configuration Bits (All MUXes): 378
+Total Feedback Wires in Final Architecture: 268
+Total Configuration Bits (All MUXes): 371

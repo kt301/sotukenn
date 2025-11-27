@@ -572,9 +572,21 @@ class Edge:
         
     def show(self):
         print("edge[{}]: ".format(self.count), end="")
-        self.src.show()
+        
+        # ★修正: src が None でないか確認する
+        if self.src is not None:
+            self.src.show()
+        else:
+            print("None", end="")
+            
         print(" -> ",end="")
-        self.dst.show()
+        
+        # ★修正: dst が None でないか確認する
+        if self.dst is not None:
+            self.dst.show()
+        else:
+            print("None", end="")
+            
         print("\n")
 
         
@@ -594,28 +606,34 @@ class Netlist:
         self.buildEdges()                   # ネットリスト内の接続リスト(fanoutもついでに)を構築
         self.writeDot()
 
-    def writeDot(self): # graphviz向けに、グラフを出力
+    # 【修正点】Noneチェックを追加した安全なwriteDot
+    def writeDot(self): 
         with open('sample.dot', 'w') as f:
             str = "digraph netlist {\n"
             f.write(str)
             for e in self.edges:
-                if type(e.src) == PAEInstanceOutput:
-                    srcname = e.src.PAEInstance.name
-                else:
-                    print(type(e.src))
-                    assert(type(e.src) == NetlistPI)
-                    srcname = e.src.name
+                srcname = "None"
+                dstname = "None"
 
-                if type(e.dst) == PAEInstanceInput:
-                    dstname = e.dst.PAEInstance.name
-                else:
-                    print(type(e.dst))
-                    assert(type(e.dst) == NetlistPO)
-                    dstname = e.dst.name
-                    
+                if e.src is not None:
+                    if type(e.src) == PAEInstanceOutput:
+                        srcname = e.src.PAEInstance.name
+                    elif type(e.src) == NetlistPI:
+                        srcname = e.src.name
+                    else:
+                        srcname = "Unknown"
+
+                if e.dst is not None:
+                    if type(e.dst) == PAEInstanceInput:
+                        dstname = e.dst.PAEInstance.name
+                    elif type(e.dst) == NetlistPO:
+                        dstname = e.dst.name
+                    else:
+                        dstname = "Unknown"
                 
-                str = "\t{}->{}\n".format(srcname, dstname)
-                f.write(str)
+                if srcname != "None" and dstname != "None":
+                    str = "\t{}->{}\n".format(srcname, dstname)
+                    f.write(str)
             str = "}\n"
             f.write(str)            
         
@@ -652,11 +670,11 @@ class Netlist:
                 po.input.fanouts.append(po)
                 
 
-        for e in self.edges:
-            e.show()
+        #for e in self.edges:
+        #    e.show()
 
-        for p in self.PAEInstances.values():
-            p.showFanouts()
+        #for p in self.PAEInstances.values():
+        #    p.showFanouts()
                 
 
         
@@ -875,7 +893,8 @@ def PAEInstanceOrPIPO(src):
     elif type(src) is PAEInstanceInput or type(src) is PAEInstanceOutput:
         return src.PAEInstance
     else:
-        assert("Invalid input argumet at PAEInstanceOrPIPO()")
+        return None
+        #assert("Invalid input argumet at PAEInstanceOrPIPO()")
         
 
 # BindConnect制約作成時に使用
@@ -895,7 +914,8 @@ def bindingPort(src, binding):
     elif type(src) is NetlistPI or type(src) is NetlistPO: 
         return binding
     else:
-        assert("Invalid input argumet at bindingPort()")
+        return None
+        #assert("Invalid input argumet at bindingPort()")
     
 
 class SATmgr: # SAT関係の情報を蓄えるクラス
@@ -1052,7 +1072,7 @@ class SATmgr: # SAT関係の情報を蓄えるクラス
         # for minisat
         #res = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)        
 
-        command = ['kissat', '--time=3', '--no-binary', 'sample.cnf']        
+        command = ['kissat', '--time=60', '--no-binary', 'sample.cnf']        
         # for kissat
         with open('sample.output', 'w') as output_file:
             with open('sample.cnf', 'r') as input_file:
@@ -1123,68 +1143,41 @@ class SATmgr: # SAT関係の情報を蓄えるクラス
         
     # BindConnect制約を作る
     def buildBindConnectConstraints(self):
-
-        #return # コメントアウト　2024/12/23 配線評価のため        
+        # return
         for e in self.Netlist.edges:
             src = e.src
             dst = e.dst
-
             srcInst = PAEInstanceOrPIPO(src)
             dstInst = PAEInstanceOrPIPO(dst)
-
-            #print("--- src of edge")
-            #src.show()
-            #print("")
-            #srcInst.show()
-            #print(srcInst.name)
-
-            #print("--- dst of edge")
-            #dst.show()
-            #print("")            
-            #dstInst.show()
-            #print("")            
-            #print(dstInst.name)
-            #print("")
-
-            #srcInst, dstInstのバインド候補を列挙できるはず。
-            #bind変数のキーをチェックする。
-            #srcInst, dstInstを第一のキーとして、bind変数の辞書をチェックし、
-            #第二のキーが、バインド結果の候補となる。
-            #Bind変数を作るときのように、PAECells, PIs, POsを列挙する。
             
-            #srcInstのバインド候補の列挙
-            #print("srcBindings & BindingPorts")
-            srcBindings = [] # srcInstのバインド候補のPAECell, PI/PO
-            srcBindingPorts = [] # バインド候補のPAECellのポート, PI/PO
+            # 【修正】ここでNoneチェックを行う
+            if srcInst is None or dstInst is None: continue
+
+            srcBindings = [] 
+            srcBindingPorts = [] 
             for k, v in self.BindVars.items():
                 if k[0] == srcInst:
                     srcBindings.append(k[1])
                     srcBindingPort = bindingPort(src, k[1])
                     srcBindingPorts.append(srcBindingPort)
-                    #k[1].show()
-                    #srcBindingPort.show()
-
-            #print("dstBindings & BindingPorts")                    
-            #srcInstのバインド候補の列挙
-            dstBindings = [] # dstInstのバインド候補のPAECell, PI/PO
-            dstBindingPorts = [] # バインド候補のPAECellのポート, PI/PO
+            
+            dstBindings = [] 
+            dstBindingPorts = [] 
             for k, v in self.BindVars.items():
                 if k[0] == dstInst:
                     dstBindings.append(k[1])
                     dstBindingPort = bindingPort(dst, k[1])
                     dstBindingPorts.append(dstBindingPort)
-                    #dstBindingPort.show()
 
             for j1, srcBinding in enumerate(srcBindings):
                 for j2, dstBinding in enumerate(dstBindings):
-
-                    #print("in j1&j2 loop")
-
                     srcBindingPort = srcBindingPorts[j1]
                     dstBindingPort = dstBindingPorts[j2]
+                    
+                    # 【修正】ここでもNoneチェックを行う
+                    if srcBindingPort is None or dstBindingPort is None: continue
 
                     bindConnectConstraint = Constraint()                    
-
                     wv = self.WireVars.get((srcBindingPort, dstBindingPort))
                     if wv is None:
                         #print("Following WireVars not found:")
@@ -1573,7 +1566,7 @@ class SATmgr: # SAT関係の情報を蓄えるクラス
 def main():
     # ================= 設定 =================
     NETLIST_DIR = "netlists_500/*.net" # 環境に合わせて書き換えてください
-    STRUCT_FILE = "wirestat_final.txt"
+    STRUCT_FILE = "wirestat_final2.txt"
     LOG_FILE = "sat_debug.log"              # デバッグログの出力先
     # ========================================
 

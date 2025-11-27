@@ -9,6 +9,7 @@ import tqdm
 import pandas as pd 
 import os
 from collections import defaultdict
+import statistics
 
 def initial_placement(G, grid_size_x=4, grid_size_y=4):   
     #1. ノードの種類を判別
@@ -183,70 +184,115 @@ def total_cost(G, pos, PAENodes, wirestat_final_set, M=10000, w_ff=2, w_fb=10,MU
     return total
 
 
-def simulated_annealing(G, initial_pos, PAENodes, wirestat_final_set, grid_size_x=4, grid_size_y=4, initial_temp=1000,
-                        cooling_rate=0.995, iterations=100000, M=10000, w_ff=2, w_fb=10,MUX_PENALTY_WEIGHT=10000,SHARED_BONUS=-10000,
-                        MUX_SIZE_LIMIT=32, OmuxCost=0, w_io=0):    
+def simulated_annealing(G, initial_pos, PAENodes, wirestat_final_set, grid_size_x=4, grid_size_y=4, 
+                        initial_temp=5000, 
+                        cooling_rate=0.999, 
+                        iterations=100000, 
+                        M=100, w_ff=2, w_fb=50, MUX_PENALTY_WEIGHT=0, SHARED_BONUS=-20, # パラメータは現在の設定に合わせてください
+                        MUX_SIZE_LIMIT=32, OmuxCost=0, w_io=0, stagnation_limit=5000, 
+                        log_interval=None):    
+    
     current_pos = initial_pos.copy()
-    best_pos = current_pos.copy()
     current_cost = total_cost(G, current_pos, PAENodes, wirestat_final_set, M, w_ff, w_fb, 
                               MUX_PENALTY_WEIGHT, SHARED_BONUS, MUX_SIZE_LIMIT, OmuxCost, w_io)
+    
+    best_pos = current_pos.copy()
     best_cost = current_cost
-    temp = initial_temp
+    
+    # リヒート前の「真のベスト解」を保存する変数
+    global_best_pos = best_pos.copy()
+    global_best_cost = best_cost
 
-    # 全ての可能な位置を生成
+    temp = initial_temp
     all_positions = [(x, y) for x in range(grid_size_x) for y in range(grid_size_y)]
     internal_nodes = [n for n in G.nodes() if G.nodes[n].get('type') == 'internal']
 
-    for _ in range(iterations):
+    last_improvement_iter = 0
+    reheat_count = 0
+    MAX_REHEATS = 3
+    
+    if log_interval is None:
+        log_interval = int(iterations / 10)
+
+    for i in range(iterations):
+        
+        # --- 早期終了 & リヒート判定 ---
+        # 温度が1.0未満（ほぼ凍結）かつ、しばらく更新がない場合
+        if (i - last_improvement_iter) > stagnation_limit and temp < 1.0:
+            
+            if reheat_count < MAX_REHEATS:
+                reheat_count += 1
+                
+                # リヒート前にベスト解をバックアップ
+                if best_cost < global_best_cost:
+                    global_best_pos = best_pos.copy()
+                    global_best_cost = best_cost
+                
+                # 温度を少し戻す
+                temp = initial_temp * (0.8 ** reheat_count)
+                last_improvement_iter = i 
+                
+                print(f"   -> [Reheat {reheat_count}/{MAX_REHEATS}] Stagnated at iter {i}. Backup cost: {global_best_cost}. Boosting Temp to {temp:.2f}")
+                continue
+            else:
+                print(f"  -> Early stopping at iteration {i} (Best cost: {global_best_cost})")
+                break
+
         if not internal_nodes:
             break
-        node_to_move = random.choice(internal_nodes) 
-
-        #現在の位置を除外
-        possible_positions = [pos for pos in all_positions if pos != current_pos[node_to_move]]
             
-        # ノードを新しい位置に移動（空いている位置または他のノードと交換）
+        # --- 移動と評価 ---
+        node_to_move = random.choice(internal_nodes) 
+        possible_positions = [pos for pos in all_positions if pos != current_pos[node_to_move]]
+        if not possible_positions: continue
+            
         new_pos = current_pos.copy()
         new_position = random.choice(possible_positions)
         
-        # 移動先に「別の内部セル」がいないか探す
         node_at_new_position = None
         for node, pos in current_pos.items():
             if node in internal_nodes and pos == new_position:
                 node_at_new_position = node
                 break
         
-        # 選択した位置に他のノードがある場合は交換、なければ単に移動
         if node_at_new_position:
             new_pos[node_at_new_position] = current_pos[node_to_move]
         new_pos[node_to_move] = new_position
 
-        '''
-        # 「純粋なスワップのみ」のロジック -
-        possible_targets = [n for n in internal_nodes if n != node_to_move]
-        if not possible_targets: continue
-        node_to_swap = random.choice(possible_targets)
-        new_pos = current_pos.copy()
-        new_pos[node_to_move] = current_pos[node_to_swap]
-        new_pos[node_to_swap] = current_pos[node_to_move]
-        '''
         new_cost = total_cost(G, new_pos, PAENodes, wirestat_final_set, M, w_ff, w_fb, 
                               MUX_PENALTY_WEIGHT, SHARED_BONUS, MUX_SIZE_LIMIT, OmuxCost, w_io)
         cost_diff = new_cost - current_cost
 
-        # 採否判定 (遷移ルール)
         if cost_diff < 0 or random.random() < math.exp(-cost_diff / temp):
             current_pos = new_pos
             current_cost = new_cost
             
-            # ベスト解の更新
             if current_cost < best_cost:
                 best_pos = current_pos.copy()
                 best_cost = current_cost
+                last_improvement_iter = i
+                
+                if best_cost < global_best_cost:
+                    global_best_pos = best_pos.copy()
+                    global_best_cost = best_cost
 
-        temp *= cooling_rate # 冷却
+        temp *= cooling_rate
 
-    return best_pos
+        # 遷移回数1万回ごとのログ
+        if i % log_interval == 0:
+            print(f"Iter: {i}, Temp: {temp:.2f}, Cost: {current_cost:.1f}, Best: {best_cost:.1f}, GlobalBest: {global_best_cost:.1f}")
+
+    # --- 最終判定 ---
+    final_pos = best_pos
+    final_cost = best_cost
+    
+    # もしリヒート後の結果より、リヒート前のバックアップの方が良かったら戻す
+    if global_best_cost < best_cost:
+        print(f"  -> Reverting to pre-reheat best solution (Cost: {global_best_cost:.1f} < {best_cost:.1f})")
+        final_pos = global_best_pos
+        final_cost = global_best_cost
+
+    return final_pos, i + 1, final_cost
 
 def main():  
     # --- 1. 初期化と初期設定 ---
@@ -255,14 +301,11 @@ def main():
 
     netlist_path_pattern = 'data/netlists_500/*.net'
     all_netlist_files = glob.glob(netlist_path_pattern) # 1. リストを取得
-    random.seed(6) # 2. ★ここをファイルごとに変える★ (1, 2, 3...)
-    random.shuffle(all_netlist_files) # 3. シードに基づいてシャッフル
-    print(f"Starting Incremental SA (Sequential Learning) run...")
-    print(f"Processing netlists from: {netlist_path_pattern}")
     
     # SAパラメータ定義 
     ITERATIONS_COUNT = 100000
-    COOLING_RATE = 0.995
+    COOLING_RATE = 0.999
+    INITIAL_TEMP_PARAM = 4000
     grid_size_x = 4
     grid_size_y = 4
 
@@ -270,12 +313,38 @@ def main():
     W_FF_PARAM = 2
     W_FB_PARAM = 10
     MUX_PENALTY_WEIGHT_PARAM = 0
-    SHARED_BONUS_PARAM = -10
+    SHARED_BONUS_PARAM = -20000
     MUX_SIZE_LIMIT_PARAM = 32
     OMUX_COST_PARAM = 0
     W_IO_PARAM = 0
+
+    # --- ファイルリストの取得と順序決定 ---
+    import os
+    all_files = glob.glob(netlist_path_pattern)
+    
+    # 【方針変更】ファイル名順で固定（再現性確保のため）
+    all_files.sort()
+    print(f"Sorted {len(all_files)} netlists by Name (Asc).")
+
+    # =================================================
+    # 【パラメータ調整用】シード設定エリア
+    # =================================================
+    # コスト比較時はここを固定する(Noneにするとランダムシードモード)
+    CURRENT_SEED = 2 
+    
+    if CURRENT_SEED is not None:
+        print(f"★ FIXED SEED MODE: seed={CURRENT_SEED}")
+        random.seed(CURRENT_SEED)
+    else:
+        print("★ RANDOM SEED MODE")
+        random.seed(None)
+    # =================================================
+    # 【追加】統計情報収集用リスト
+    stats_iterations = []
+    stats_costs = []
+
     #--- 2.SAの実行 ---
-    for filename in tqdm.tqdm(glob.glob(netlist_path_pattern)):
+    for filename in tqdm.tqdm(all_files):
         try:
             with open(filename) as f:
                 G, PAENodes = parse_circuit(f.read())
@@ -291,12 +360,26 @@ def main():
         initial_pos = initial_placement(G, grid_size_x, grid_size_y)
             
         # SA本体に「現在の配線DB」を渡す 
-        optimized_pos = simulated_annealing(
-            G, initial_pos, PAENodes, wirestat_final_set,grid_size_x=grid_size_x, grid_size_y=grid_size_y,
-            iterations=ITERATIONS_COUNT,cooling_rate=COOLING_RATE,
-            M=M_PARAM, w_ff=W_FF_PARAM, w_fb=W_FB_PARAM, MUX_PENALTY_WEIGHT=MUX_PENALTY_WEIGHT_PARAM,
-            SHARED_BONUS=SHARED_BONUS_PARAM,MUX_SIZE_LIMIT=MUX_SIZE_LIMIT_PARAM,OmuxCost=OMUX_COST_PARAM,w_io=W_IO_PARAM
+        optimized_pos, final_iter, final_cost = simulated_annealing(
+            G, initial_pos, PAENodes, wirestat_final_set,
+            grid_size_x=grid_size_x, grid_size_y=grid_size_y,
+            
+            # ★ここで変数を渡す
+            initial_temp=INITIAL_TEMP_PARAM,  
+            iterations=ITERATIONS_COUNT,
+            cooling_rate=COOLING_RATE,
+            
+            M=M_PARAM, w_ff=W_FF_PARAM, w_fb=W_FB_PARAM, 
+            MUX_PENALTY_WEIGHT=MUX_PENALTY_WEIGHT_PARAM,
+            SHARED_BONUS=SHARED_BONUS_PARAM,
+            MUX_SIZE_LIMIT=MUX_SIZE_LIMIT_PARAM,
+            OmuxCost=OMUX_COST_PARAM,
+            w_io=W_IO_PARAM
         )
+        # 【追加】統計情報を記録
+        stats_iterations.append(final_iter)
+        stats_costs.append(final_cost)
+
 
         # SAが使った「最終的な配線」を取得 
         final_wires_for_this_netlist = get_wires(PAENodes, optimized_pos, G)
@@ -337,7 +420,7 @@ def main():
 
     # --- 3. 最終的な統計ファイルの書き出し ---
     sortedWireStats = dict(sorted(wireStats_total_usage.items(), key=lambda item: item[1], reverse=True))
-    print(f"\nTotal {len(sortedWireStats)} unique wires used (sum). Saving to wire_stats.txt...")
+    print(f"\nTotal {len(sortedWireStats)} unique wires used (sum). Saving to wire_stats6.txt...")
     with open("wire_stats6.txt", "w") as f:
         for wire_tuple, count in sortedWireStats.items():
             f.write(f"{' '.join(map(str, wire_tuple))} {count}\n")
@@ -422,6 +505,40 @@ def main():
         for line in report_lines:
             print(line)
             f.write(line + "\n")
+
+    # 【追加】 最終実行レポート (これが欲しかったやつです！)
+    print("\n" + "="*40)
+    print("       SA EXECUTION REPORT       ")
+    print("="*40)
+    print(f"Seed Used       : {CURRENT_SEED}")
+    print(f"Max Iterations  : {ITERATIONS_COUNT}")
+    print(f"Cooling Rate    : {COOLING_RATE}")
+    print("-" * 40)
+    
+    if stats_iterations:
+        avg_iter = statistics.mean(stats_iterations)
+        max_iter_actual = max(stats_iterations)
+        min_iter = min(stats_iterations)
+        early_stop_count = sum(1 for i in stats_iterations if i < ITERATIONS_COUNT)
+        
+        print(f"Average Steps   : {avg_iter:.1f}")
+        print(f"Max Steps Taken : {max_iter_actual} (Limit: {ITERATIONS_COUNT})")
+        print(f"Min Steps Taken : {min_iter}")
+        print(f"Early Stopped   : {early_stop_count} / {len(stats_iterations)} ({(early_stop_count/len(stats_iterations))*100:.1f}%)")
+        
+        # 簡単な診断
+        print("-" * 40)
+        print("[DIAGNOSIS]")
+        if avg_iter < (ITERATIONS_COUNT * 0.8):
+            print("✅ Iteration count is SUFFICIENT.")
+            print("   Most circuits converged early.")
+        elif max_iter_actual == ITERATIONS_COUNT:
+            print("⚠️  Iteration count might be INSUFFICIENT.")
+            print("   Some circuits used up all iterations. Consider increasing iterations.")
+        else:
+            print("✅ Iteration count seems BALANCED.")
+            
+    print("="*40)
 
     print("SA_out6.py run complete.")
 
